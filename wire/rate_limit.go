@@ -349,6 +349,7 @@ func DefaultSNACRateLimits() SNACRateLimits {
 				FeedbagIsAuthRequiredQuery:      1,
 				FeedbagIsAuthRequiredReply:      1,
 				FeedbagRecentBuddyUpdate:        1,
+				FeedbagICQExtension37:           1,
 				0x0026:                          1, // unknown
 				0x0027:                          1, // unknown
 				0x0028:                          1, // unknown

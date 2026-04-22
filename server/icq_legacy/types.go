@@ -299,6 +299,10 @@ type MessageRelayer interface {
 type BuddyBroadcaster interface {
 	BroadcastBuddyArrived(ctx context.Context, screenName state.IdentScreenName, userInfo wire.TLVUserInfo) error
 	BroadcastBuddyDeparted(ctx context.Context, screenName state.IdentScreenName) error
+	// BroadcastVisibility mirrors OService ClientOnline: notify watchers and
+	// push BuddyArrived for mutual-list peers (legacy ICQ5 sign-on otherwise only
+	// called BroadcastBuddyArrived and skipped the second half of the graph).
+	BroadcastVisibility(ctx context.Context, you *state.SessionInstance, filter []state.IdentScreenName, doSendDepartures bool) error
 }
 
 // OfflineMessageManager provides offline message storage and retrieval.

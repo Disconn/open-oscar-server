@@ -230,6 +230,7 @@ var subGroupName = map[uint16]map[uint16]string{
 		FeedbagIsAuthRequiredQuery:      "FeedbagIsAuthRequiredQuery",
 		FeedbagIsAuthRequiredReply:      "FeedbagIsAuthRequiredReply",
 		FeedbagRecentBuddyUpdate:        "FeedbagRecentBuddyUpdate",
+		FeedbagICQExtension37:           "FeedbagICQExtension37",
 	},
 	Alert: {
 		AlertErr:                       "AlertErr",
@@ -300,6 +301,11 @@ var subGroupName = map[uint16]map[uint16]string{
 		ODirKeywordListQuery: "ODirKeywordListQuery",
 		ODirKeywordListReply: "ODirKeywordListReply",
 	},
+	UserLookup: {
+		UserLookupErr:         "UserLookupErr",
+		UserLookupFindByEmail: "UserLookupFindByEmail",
+		UserLookupFindReply:   "UserLookupFindReply",
+	},
 	Stats: {
 		StatsErr:                  "StatsErr",
 		StatsSetMinReportInterval: "StatsSetMinReportInterval",
@@ -360,6 +366,12 @@ var icqDBQueryMeta = map[uint16]string{
 	ICQDBQueryMetaReqSearchByUIN:       "ICQDBQueryMetaReqSearchByUIN",
 	ICQDBQueryMetaReqSearchByEmail:     "ICQDBQueryMetaReqSearchByEmail",
 	ICQDBQueryMetaReqSearchWhitePages:  "ICQDBQueryMetaReqSearchWhitePages",
+	ICQDBQueryMetaReqSearchWhitePages2: "ICQDBQueryMetaReqSearchWhitePages2",
+	ICQDBQueryMetaReqSearchByDetailsWildcard:  "ICQDBQueryMetaReqSearchByDetailsWildcard",
+	ICQDBQueryMetaReqSearchByEmailWildcard:    "ICQDBQueryMetaReqSearchByEmailWildcard",
+	ICQDBQueryMetaReqSearchWhitePagesWildcard: "ICQDBQueryMetaReqSearchWhitePagesWildcard",
+	ICQDBQueryMetaReqSearchByUIN2:      "ICQDBQueryMetaReqSearchByUIN2",
+	ICQDBQueryMetaReqSearchByEmail3:  "ICQDBQueryMetaReqSearchByEmail3",
 	ICQDBQueryMetaReqXMLReq:            "ICQDBQueryMetaReqXMLReq",
 	ICQDBQueryMetaReqStat0a8c:          "ICQDBQueryMetaReqStat0a8c",
 	ICQDBQueryMetaReqStat0a96:          "ICQDBQueryMetaReqStat0a96",

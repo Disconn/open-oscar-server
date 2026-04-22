@@ -158,3 +158,35 @@ func (_c *mockBuddyBroadcaster_BroadcastBuddyDeparted_Call) RunAndReturn(run fun
 	_c.Call.Return(run)
 	return _c
 }
+
+// BroadcastVisibility provides a mock function for the type mockBuddyBroadcaster
+func (_mock *mockBuddyBroadcaster) BroadcastVisibility(ctx context.Context, you *state.SessionInstance, filter []state.IdentScreenName, doSendDepartures bool) error {
+	ret := _mock.Called(ctx, you, filter, doSendDepartures)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BroadcastVisibility")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, []state.IdentScreenName, bool) error); ok {
+		r0 = returnFunc(ctx, you, filter, doSendDepartures)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// mockBuddyBroadcaster_BroadcastVisibility_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'BroadcastVisibility'
+type mockBuddyBroadcaster_BroadcastVisibility_Call struct {
+	*mock.Call
+}
+
+// BroadcastVisibility is a helper method to define mock.On call
+func (_e *mockBuddyBroadcaster_Expecter) BroadcastVisibility(ctx interface{}, you interface{}, filter interface{}, doSendDepartures interface{}) *mockBuddyBroadcaster_BroadcastVisibility_Call {
+	return &mockBuddyBroadcaster_BroadcastVisibility_Call{Call: _e.mock.On("BroadcastVisibility", ctx, you, filter, doSendDepartures)}
+}
+
+func (_c *mockBuddyBroadcaster_BroadcastVisibility_Call) Return(err error) *mockBuddyBroadcaster_BroadcastVisibility_Call {
+	_c.Call.Return(err)
+	return _c
+}

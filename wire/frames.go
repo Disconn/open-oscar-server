@@ -33,10 +33,11 @@ type FLAPFrame struct {
 }
 
 // FLAPFrameDisconnect is the last FLAP frame sent to a client before
-// disconnection. It differs from FLAPFrame in that there is no payload length
-// prefix at the end, which causes pre-multi-conn Windows AIM clients to
-// improperly handle server disconnections, as when the regular FLAPFrame type
-// is used.
+// disconnection. Unlike FLAPFrame, the on-wire layout omits the usual
+// payload-length field after the sequence number. Pre-multi-connection Windows
+// AIM builds mishandle server-initiated disconnects when the signoff uses a
+// normal FLAP header with that length field present (the client can hang
+// instead of showing "connection lost").
 type FLAPFrameDisconnect struct {
 	StartMarker uint8
 	FrameType   uint8
@@ -78,7 +79,7 @@ func NewFlapClient(startSeq uint32, r io.Reader, w io.Writer) *FlapClient {
 	}
 }
 
-// FlapClient sends and receive FLAP frames to and from the server. It ensures
+// FlapClient sends and receives FLAP frames to and from the server. It ensures
 // that the message sequence numbers are properly incremented after sending
 // each successive message. It is not safe to use with multiple goroutines
 // without synchronization.
@@ -212,6 +213,23 @@ func (f *FlapClient) SendSNAC(frame SNACFrame, body any) error {
 		return err
 	}
 
+	return f.sendFlapDataPayload(snacBuf.Bytes())
+}
+
+// SendSNACRawBody sends a SNAC whose body is already encoded (e.g. echo of an
+// ICQ-specific extension the wire codec does not model).
+func (f *FlapClient) SendSNACRawBody(frame SNACFrame, body []byte) error {
+	snacBuf := &bytes.Buffer{}
+	if err := MarshalBE(frame, snacBuf); err != nil {
+		return err
+	}
+	if _, err := snacBuf.Write(body); err != nil {
+		return err
+	}
+	return f.sendFlapDataPayload(snacBuf.Bytes())
+}
+
+func (f *FlapClient) sendFlapDataPayload(payload []byte) error {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
 
@@ -219,7 +237,7 @@ func (f *FlapClient) SendSNAC(frame SNACFrame, body any) error {
 		StartMarker: 42,
 		FrameType:   FLAPFrameData,
 		Sequence:    uint16(f.sequence),
-		Payload:     snacBuf.Bytes(),
+		Payload:     payload,
 	}
 	if err := MarshalBE(flap, f.w); err != nil {
 		return err

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	"github.com/mk6i/open-oscar-server/config"
+	"github.com/mk6i/open-oscar-server/internal/icqctx"
 	"github.com/mk6i/open-oscar-server/server/oscar/middleware"
 	"github.com/mk6i/open-oscar-server/state"
 	"github.com/mk6i/open-oscar-server/wire"
@@ -18,15 +19,19 @@ import (
 var (
 	// ErrRouteNotFound is an error that indicates a failure to find a matching
 	// route for an OSCAR protocol request.
-	ErrRouteNotFound            = errors.New("route not found")
-	errUnknownICQMetaReqType    = errors.New("unknown ICQ request type")
-	errUnknownICQMetaReqSubType = errors.New("unknown ICQ metadata request subtype")
+	ErrRouteNotFound = errors.New("route not found")
 )
 
 // ResponseWriter is the interface for sending a SNAC response to the client
 // from the server handlers.
 type ResponseWriter interface {
 	SendSNAC(frame wire.SNACFrame, body any) error
+}
+
+// snacRawOut is implemented by wire.FlapClient for pre-encoded SNAC bodies
+// (e.g. Feedbag ICQ extension echo).
+type snacRawOut interface {
+	SendSNACRawBody(frame wire.SNACFrame, body []byte) error
 }
 
 // Handler defines a structure for routing OSCAR protocol requests to
@@ -161,6 +166,54 @@ func (rt Handler) BuddyRightsQuery(ctx context.Context, _ *state.SessionInstance
 	outSNAC := rt.BuddyService.RightsQuery(ctx, inFrame)
 	rt.LogRequestAndResponse(ctx, inFrame, inSNAC, outSNAC.Frame, outSNAC.Body)
 	return rw.SendSNAC(outSNAC.Frame, outSNAC.Body)
+}
+
+func (rt Handler) BuddyWatcherListQuery(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
+	inSNAC := wire.SNAC_0x03_0x06_BuddyWatcherListQuery{}
+	if err := wire.UnmarshalBE(&inSNAC, r); err != nil {
+		return err
+	}
+	outSNAC := rt.BuddyService.BuddyWatcherListQuery(ctx, inFrame)
+	rt.LogRequestAndResponse(ctx, inFrame, inSNAC, outSNAC.Frame, outSNAC.Body)
+	if err := rw.SendSNAC(outSNAC.Frame, outSNAC.Body); err != nil {
+		return err
+	}
+	// ICQ6 may not send 0x03/0x08 SubRequest after this; re-broadcast here so
+	// online buddies appear with enriched TLVs even without a SubRequest.
+	if instance != nil && instance.SignonComplete() {
+		if err := rt.BuddyService.BroadcastVisibility(ctx, instance, nil, false); err != nil {
+			return fmt.Errorf("BuddyWatcherListQuery: BroadcastVisibility: %w", err)
+		}
+	}
+	return nil
+}
+
+func (rt Handler) BuddyWatcherSubRequest(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
+	if err := rt.BuddyService.BuddyWatcherSubRequest(ctx, instance, inFrame, r); err != nil {
+		return err
+	}
+	rt.LogRequest(ctx, inFrame, nil)
+	return nil
+}
+
+// BuddyWatcherNotification accepts SNAC(0x03,0x09). ICQ 6 may send this after
+// watcher subscribe; ignoring the body avoids SNAC(0x03,0x01) Invalid on the wire.
+func (rt Handler) BuddyWatcherNotification(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, _ ResponseWriter) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	rt.LogRequest(ctx, inFrame, nil)
+	return nil
+}
+
+// BuddyRejectNotification accepts SNAC(0x03,0x0A). ICQ clients may send this when
+// declining visibility; draining the body avoids SNAC(0x03,0x01) Invalid on the wire.
+func (rt Handler) BuddyRejectNotification(ctx context.Context, _ *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, _ ResponseWriter) error {
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return err
+	}
+	rt.LogRequest(ctx, inFrame, nil)
+	return nil
 }
 
 func (rt Handler) BuddyAddBuddies(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
@@ -391,6 +444,72 @@ func (rt Handler) FeedbagRespondAuthorizeToHost(ctx context.Context, instance *s
 	return nil
 }
 
+// FeedbagICQExtension37 handles SNAC(0x13,0x0037) used by ICQ 6 after contact-list
+// / authorization sequences. Clients send a short typed payload; echoing it back
+// keeps SSI in sync (an empty body leaves ICQ 6 treating the peer as non-buddy).
+func (rt Handler) FeedbagICQExtension37(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
+	payload, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	if rt.Logger != nil && len(payload) > 0 {
+		n := min(len(payload), 48)
+		rt.Logger.DebugContext(ctx, "feedbag ICQ extension 0x0037",
+			"payload_len", len(payload),
+			"payload_hex_prefix", fmt.Sprintf("%X", payload[:n]))
+	}
+	out := wire.SNACFrame{
+		FoodGroup: wire.Feedbag,
+		SubGroup:  wire.FeedbagICQExtension37,
+		RequestID: inFrame.RequestID,
+	}
+	// ICQ 6 sends a 15-byte typed payload; an empty reply leaves SSI out of sync.
+	// Echo the request bytes (observed pattern: 01/02 + UIN + trailer).
+	outPayload := append([]byte(nil), payload...)
+	if sr, ok := rw.(snacRawOut); ok {
+		if err := sr.SendSNACRawBody(out, outPayload); err != nil {
+			return err
+		}
+	} else if err := rw.SendSNAC(out, struct{}{}); err != nil {
+		return err
+	}
+	rt.LogRequest(ctx, inFrame, nil)
+	return nil
+}
+
+// FeedbagPreAuthorizeBuddy handles SNAC(0x13,0x0014). ICQ sends this when the user
+// pre-authorizes someone to add them; without a reply the client logs
+// "route not found" and contact flows can stall.
+func (rt Handler) FeedbagPreAuthorizeBuddy(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
+	payload, err := io.ReadAll(r)
+	if err != nil {
+		return err
+	}
+	var inBody wire.SNAC_0x13_0x14_FeedbagPreAuthorizeBuddy
+	_ = wire.UnmarshalBE(&inBody, bytes.NewReader(payload))
+	if rt.Logger != nil && len(payload) > 0 {
+		n := min(len(payload), 64)
+		rt.Logger.DebugContext(ctx, "FeedbagPreAuthorizeBuddy",
+			"screenName", instance.IdentScreenName().String(),
+			"buddy_uin", inBody.BuddyUIN,
+			"payload_len", len(payload),
+			"payload_hex_prefix", fmt.Sprintf("%X", payload[:n]),
+		)
+	}
+	out := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Feedbag,
+			SubGroup:  wire.FeedbagStatus,
+			RequestID: inFrame.RequestID,
+		},
+		Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+			Results: []uint16{0x0000},
+		},
+	}
+	rt.LogRequestAndResponse(ctx, inFrame, inBody, out.Frame, out.Body)
+	return rw.SendSNAC(out.Frame, out.Body)
+}
+
 func (rt Handler) ICBMAddParameters(ctx context.Context, _ *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, _ ResponseWriter) error {
 	inBody := wire.SNAC_0x04_0x02_ICBMAddParameters{}
 	rt.LogRequest(ctx, inFrame, inBody)
@@ -461,11 +580,36 @@ func (rt Handler) ICBMOfflineRetrieve(ctx context.Context, instance *state.Sessi
 	return rw.SendSNAC(outSNAC.Frame, outSNAC.Body)
 }
 
+func (rt Handler) logICQDBMetaParsed(ctx context.Context, inFrame wire.SNACFrame, icqMD wire.ICQMetadataWithSubType, md []byte, remainder []byte) {
+	if rt.Logger == nil {
+		return
+	}
+	sub := uint16(0)
+	if icqMD.Optional != nil {
+		sub = icqMD.Optional.ReqSubType
+	}
+	rt.Logger.InfoContext(ctx, "ICQ DB meta request parsed (SNAC 0x15,0x02)",
+		"snac_request_id", fmt.Sprintf("0x%08X", inFrame.RequestID),
+		"snac_request_id_dec", inFrame.RequestID,
+		"icq_req_type_hex", fmt.Sprintf("0x%04X", icqMD.ReqType),
+		"icq_req_type_name", wire.ICQDBQueryName(icqMD.ReqType),
+		"icq_meta_sub_hex", fmt.Sprintf("0x%04X", sub),
+		"icq_meta_sub_name", wire.ICQDBQueryMetaName(sub),
+		"icq_seq", icqMD.Seq,
+		"metadata_tlv_hex", fmt.Sprintf("%X", md),
+		"payload_after_icq_meta_header_hex", fmt.Sprintf("%X", remainder),
+	)
+}
+
 func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader, rw ResponseWriter) error {
 	inBody := wire.SNAC_0x15_0x02_BQuery{}
 	if err := wire.UnmarshalBE(&inBody, r); err != nil {
 		return err
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = icqctx.WithSNACRequestID(ctx, inFrame.RequestID)
 
 	md, ok := inBody.Bytes(wire.ICQTLVTagsMetadata)
 	if !ok {
@@ -491,10 +635,13 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 		if icqMD.Optional == nil {
 			return errors.New("got req without subtype")
 		}
-		rt.Logger.Debug("ICQ client request",
+		rt.logICQDBMetaParsed(ctx, inFrame, icqMD, md, buf.Bytes())
+		rt.Logger.DebugContext(ctx, "ICQ client DB query",
 			"query_name", wire.ICQDBQueryName(icqMD.ReqType),
 			"query_type", wire.ICQDBQueryMetaName(icqMD.Optional.ReqSubType),
-			"uin", instance.UIN())
+			"uin", instance.UIN(),
+			"snac_request_id", inFrame.RequestID,
+		)
 
 		switch icqMD.Optional.ReqSubType {
 		case wire.ICQDBQueryMetaReqShortInfo:
@@ -517,6 +664,9 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 			if err := rt.ICQService.XMLReqData(ctx, instance, req, icqMD.Seq); err != nil {
 				return err
 			}
+		case wire.ICQDBQueryMetaReplyXMLData:
+			rt.Logger.Debug("got ICQ 0x8A2 XML data from client", "raw", buf.Bytes())
+			return rt.ICQService.MetaTerminalAck(ctx, instance, icqMD.Seq, wire.ICQStatusCodeOK)
 		case wire.ICQDBQueryMetaReqSetPermissions:
 			req := wire.ICQ_0x07D0_0x0424_DBQueryMetaReqSetPermissions{}
 			if err := wire.UnmarshalLE(&req, buf); err != nil {
@@ -563,6 +713,14 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 			if err := rt.ICQService.FindByICQEmail(ctx, instance, req, icqMD.Seq); err != nil {
 				return err
 			}
+		case wire.ICQDBQueryMetaReqSearchByEmailWildcard:
+			req := wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail{}
+			if err := wire.UnmarshalLE(&req, buf); err != nil {
+				return err
+			}
+			if err := rt.ICQService.FindByICQEmailWildcard(ctx, instance, req, icqMD.Seq); err != nil {
+				return err
+			}
 		case wire.ICQDBQueryMetaReqSearchByEmail3:
 			req := wire.ICQ_0x07D0_0x0573_DBQueryMetaReqSearchByEmail3{}
 			if err := wire.UnmarshalLE(&req, buf); err != nil {
@@ -579,6 +737,14 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 			if err := rt.ICQService.FindByICQName(ctx, instance, req, icqMD.Seq); err != nil {
 				return err
 			}
+		case wire.ICQDBQueryMetaReqSearchByDetailsWildcard:
+			req := wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails{}
+			if err := wire.UnmarshalLE(&req, buf); err != nil {
+				return err
+			}
+			if err := rt.ICQService.FindByICQDetailsWildcard(ctx, instance, req, icqMD.Seq); err != nil {
+				return err
+			}
 		case wire.ICQDBQueryMetaReqSearchWhitePages:
 			req := wire.ICQ_0x07D0_0x0533_DBQueryMetaReqSearchWhitePages{}
 			if err := wire.UnmarshalLE(&req, buf); err != nil {
@@ -593,6 +759,15 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 				return err
 			}
 			if err := rt.ICQService.FindByWhitePages2(ctx, instance, req, icqMD.Seq); err != nil {
+				return err
+			}
+		case wire.ICQDBQueryMetaReqSearchWhitePagesWildcard:
+			req := wire.ICQ_0x07D0_0x0533_DBQueryMetaReqSearchWhitePages{}
+			if err := wire.UnmarshalLE(&req, buf); err != nil {
+				return err
+			}
+			ctx = icqctx.WithWhitePagesPlainWildcard(ctx, true)
+			if err := rt.ICQService.FindByICQInterests(ctx, instance, req, icqMD.Seq); err != nil {
 				return err
 			}
 		case wire.ICQDBQueryMetaReqSetBasicInfo:
@@ -663,15 +838,90 @@ func (rt Handler) ICQDBQuery(ctx context.Context, instance *state.SessionInstanc
 			wire.ICQDBQueryMetaReqStat0ad7,
 			wire.ICQDBQueryMetaReqStat0758:
 			rt.Logger.Debug("got a request for stats, not doing anything right now")
-		case wire.ICQDBQueryMetaReqDirectoryQuery, wire.ICQDBQueryMetaReqDirectoryUpdate:
-			rt.Logger.Debug("got a directory query/update request, not implemented yet")
+			return rt.ICQService.MetaTerminalAck(ctx, instance, icqMD.Seq, wire.ICQStatusCodeOK)
+		case wire.ICQDBQueryMetaReqDirectoryQuery:
+			// DirectoryQuery (0x0FA0): ICQ6 “add by UIN / directory” transport. Main
+			// “Find people” search often uses WhitePages2 (0x055F) above instead—see snac_trace
+			// INFO logs (family 0x15) to confirm which subtype a client sends.
+			if err := rt.ICQService.FindByDirectoryQuery(ctx, instance, buf.Bytes(), icqMD.Seq); err != nil {
+				return err
+			}
+		case wire.ICQDBQueryMetaReqDirectoryUpdate:
+			// ICQ6 follows DirectoryQuery self-check with this meta; it must be
+			// acknowledged in directory wire shape (0x0FB4 + embedded 0x05B9/0x0003),
+			// not a generic 0x01AE terminal ack.
+			return rt.ICQService.AckDirectoryUpdate(ctx, instance, icqMD.Seq)
 		default:
-			return fmt.Errorf("%w: %X", errUnknownICQMetaReqSubType, icqMD.Optional.ReqSubType)
+			if rt.Logger != nil {
+				rt.Logger.WarnContext(ctx, "ICQ meta subtype not implemented, sending ICQDBReply terminal ack",
+					"icq_meta_sub_hex", fmt.Sprintf("0x%04X", icqMD.Optional.ReqSubType),
+					"seq", icqMD.Seq,
+				)
+			}
+			return rt.ICQService.MetaTerminalAck(ctx, instance, icqMD.Seq, wire.ICQStatusCodeFail)
 		}
 	default:
-		return fmt.Errorf("%w: %X", errUnknownICQMetaReqType, icqMD.ReqType)
+		if rt.Logger != nil {
+			rt.Logger.WarnContext(ctx, "ICQ DB req_type not implemented, sending ICQDBReply terminal ack",
+				"icq_req_type_hex", fmt.Sprintf("0x%04X", icqMD.ReqType),
+				"seq", icqMD.Seq,
+			)
+		}
+		return rt.ICQService.MetaTerminalAck(ctx, instance, icqMD.Seq, wire.ICQStatusCodeFail)
 	}
 
+	return nil
+}
+
+func (rt Handler) ICQDBReply(ctx context.Context, inFrame wire.SNACFrame, r io.Reader) error {
+	raw, _ := io.ReadAll(r)
+	rt.Logger.DebugContext(ctx, "client sent ICQDBReply to server",
+		"request_id", inFrame.RequestID,
+		"raw_len", len(raw),
+		"raw_hex", fmt.Sprintf("%X", raw))
+
+	inBody := wire.SNAC_0x15_0x02_BQuery{}
+	if err := wire.UnmarshalBE(&inBody, bytes.NewReader(raw)); err != nil {
+		rt.Logger.DebugContext(ctx, "unable to decode ICQDBReply as TLV block", "err", err.Error())
+		if len(raw) >= 10 {
+			// Some clients send compact ack-like chunks; log LE header candidates
+			// so we can still inspect req_type/sub_type/seq on wire.
+			reqType := binary.LittleEndian.Uint16(raw[4:6])
+			seq := binary.LittleEndian.Uint16(raw[6:8])
+			subType := binary.LittleEndian.Uint16(raw[8:10])
+			rt.Logger.DebugContext(ctx, "ICQDBReply raw fallback header",
+				"req_type", fmt.Sprintf("0x%04X", reqType),
+				"seq", seq,
+				"sub_type", fmt.Sprintf("0x%04X", subType))
+		}
+		return nil
+	}
+	md, ok := inBody.Bytes(wire.ICQTLVTagsMetadata)
+	if !ok {
+		rt.Logger.DebugContext(ctx, "ICQDBReply has no metadata TLV")
+		return nil
+	}
+	icqChunk := wire.ICQMessageRequestEnvelope{}
+	if err := wire.UnmarshalLE(&icqChunk, bytes.NewBuffer(md)); err != nil {
+		rt.Logger.DebugContext(ctx, "unable to decode ICQDBReply metadata envelope", "err", err.Error())
+		return nil
+	}
+	buf := bytes.NewBuffer(icqChunk.Body)
+	icqMD := wire.ICQMetadataWithSubType{}
+	if err := wire.UnmarshalLE(&icqMD, buf); err != nil {
+		rt.Logger.DebugContext(ctx, "unable to decode ICQDBReply metadata header", "err", err.Error())
+		return nil
+	}
+	subType := uint16(0)
+	if icqMD.Optional != nil {
+		subType = icqMD.Optional.ReqSubType
+	}
+	rt.Logger.DebugContext(ctx, "decoded ICQDBReply from client",
+		"req_type", fmt.Sprintf("0x%04X", icqMD.ReqType),
+		"sub_type", fmt.Sprintf("0x%04X", subType),
+		"seq", icqMD.Seq,
+		"uin", icqMD.UIN,
+		"payload_hex", fmt.Sprintf("%X", buf.Bytes()))
 	return nil
 }
 
@@ -734,6 +984,14 @@ func (rt Handler) LocateUserInfoQuery(ctx context.Context, instance *state.Sessi
 	if err := wire.UnmarshalBE(&inBody, r); err != nil {
 		return err
 	}
+	if rt.Logger != nil && instance != nil {
+		norm := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(inBody.ScreenName))
+		rt.Logger.DebugContext(ctx, "locate UserInfoQuery",
+			"requester", instance.IdentScreenName().String(),
+			"screen_raw", inBody.ScreenName,
+			"screen_norm", norm.String(),
+			"type", inBody.Type)
+	}
 	outSNAC, err := rt.LocateService.UserInfoQuery(ctx, instance, inFrame, inBody)
 	if err != nil {
 		return err
@@ -752,6 +1010,14 @@ func (rt Handler) LocateUserInfoQuery2(ctx context.Context, instance *state.Sess
 	wrappedBody := wire.SNAC_0x02_0x05_LocateUserInfoQuery{
 		Type:       uint16(inBody.Type2),
 		ScreenName: inBody.ScreenName,
+	}
+	if rt.Logger != nil && instance != nil {
+		norm := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(wrappedBody.ScreenName))
+		rt.Logger.DebugContext(ctx, "locate UserInfoQuery2",
+			"requester", instance.IdentScreenName().String(),
+			"screen_raw", wrappedBody.ScreenName,
+			"screen_norm", norm.String(),
+			"type", wrappedBody.Type)
 	}
 	outSNAC, err := rt.LocateService.UserInfoQuery(ctx, instance, inFrame, wrappedBody)
 	if err != nil {
@@ -1006,9 +1272,23 @@ func (rt Handler) UserLookupFindByEmail(ctx context.Context, _ *state.SessionIns
 	if err := wire.UnmarshalBE(&inBody, r); err != nil {
 		return err
 	}
+	if rt.Logger != nil {
+		rt.Logger.InfoContext(ctx, "UserLookup search request parsed",
+			"snac_request_id", fmt.Sprintf("0x%08X", inFrame.RequestID),
+			"email_bytes_len", len(inBody.Email),
+			"email_bytes_hex", fmt.Sprintf("%X", inBody.Email),
+		)
+	}
 	outSNAC, err := rt.UserLookupService.FindByEmail(ctx, inFrame, inBody)
 	if err != nil {
 		return err
+	}
+	if rt.Logger != nil {
+		rt.Logger.InfoContext(ctx, "UserLookup search response (SNAC 0x0A) about to send",
+			"snac_request_id", fmt.Sprintf("0x%08X", outSNAC.Frame.RequestID),
+			"out_family_hex", fmt.Sprintf("0x%04X", outSNAC.Frame.FoodGroup),
+			"out_sub_hex", fmt.Sprintf("0x%04X", outSNAC.Frame.SubGroup),
+		)
 	}
 	rt.LogRequestAndResponse(ctx, inFrame, inBody, outSNAC.Frame, outSNAC.Body)
 	return rw.SendSNAC(outSNAC.Frame, outSNAC.Body)
@@ -1053,6 +1333,14 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 			return rt.BuddyDelBuddies(ctx, instance, inFrame, r, rw)
 		case wire.BuddyRightsQuery:
 			return rt.BuddyRightsQuery(ctx, instance, inFrame, r, rw)
+		case wire.BuddyWatcherListQuery:
+			return rt.BuddyWatcherListQuery(ctx, instance, inFrame, r, rw)
+		case wire.BuddyWatcherSubRequest:
+			return rt.BuddyWatcherSubRequest(ctx, instance, inFrame, r, rw)
+		case wire.BuddyWatcherNotification:
+			return rt.BuddyWatcherNotification(ctx, instance, inFrame, r, rw)
+		case wire.BuddyRejectNotification:
+			return rt.BuddyRejectNotification(ctx, instance, inFrame, r, rw)
 		case wire.BuddyAddTempBuddies:
 			return rt.BuddyAddTempBuddies(ctx, instance, inFrame, r, rw)
 		case wire.BuddyDelTempBuddies:
@@ -1080,6 +1368,10 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 			return rt.FeedbagDeleteItem(ctx, instance, inFrame, r, rw)
 		case wire.FeedbagEndCluster:
 			return rt.FeedbagEndCluster(ctx, instance, inFrame, r, rw)
+		case wire.FeedbagPreAuthorizeBuddy:
+			return rt.FeedbagPreAuthorizeBuddy(ctx, instance, inFrame, r, rw)
+		case wire.FeedbagICQExtension37:
+			return rt.FeedbagICQExtension37(ctx, instance, inFrame, r, rw)
 		case wire.FeedbagInsertItem:
 			return rt.FeedbagInsertItem(ctx, instance, inFrame, r, rw)
 		case wire.FeedbagQuery:
@@ -1108,6 +1400,8 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 		switch inFrame.SubGroup {
 		case wire.ICQDBQuery:
 			return rt.ICQDBQuery(ctx, instance, inFrame, r, rw)
+		case wire.ICQDBReply:
+			return rt.ICQDBReply(ctx, inFrame, r)
 		}
 	case wire.ICBM:
 		switch inFrame.SubGroup {
@@ -1203,7 +1497,6 @@ func (rt Handler) Handle(ctx context.Context, server uint16, instance *state.Ses
 		switch inFrame.SubGroup {
 		case wire.UserLookupFindByEmail:
 			return rt.UserLookupFindByEmail(ctx, instance, inFrame, r, rw)
-
 		}
 	}
 

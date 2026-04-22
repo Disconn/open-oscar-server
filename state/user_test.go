@@ -536,3 +536,17 @@ func TestUser_ValidateRoastedKerberosPass(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeICQUINBuddyKey(t *testing.T) {
+	assert.Equal(t, "365199535", NormalizeICQUINBuddyKey(NewIdentScreenName("0365199535")).String())
+	assert.Equal(t, "365199535", NormalizeICQUINBuddyKey(NewIdentScreenName("365199535")).String())
+	assert.Equal(t, "beetwo", NormalizeICQUINBuddyKey(NewIdentScreenName("Bee Two")).String())
+}
+
+func TestIdentScreenName_IsICQUIN(t *testing.T) {
+	assert.True(t, NewIdentScreenName("123456789").IsICQUIN())
+	assert.True(t, NewIdentScreenName("100003").IsICQUIN())
+	assert.False(t, NewIdentScreenName("9999").IsICQUIN())
+	assert.False(t, NewIdentScreenName("beetwo").IsICQUIN())
+	assert.False(t, NewIdentScreenName("").IsICQUIN())
+}

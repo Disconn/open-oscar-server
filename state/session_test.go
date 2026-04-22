@@ -83,6 +83,26 @@ func TestSession_SetAndGetUIN(t *testing.T) {
 	assert.Equal(t, uin, s.UIN())
 }
 
+func TestSession_BuddyTLVUserInfo_usesNumericUINInScreenName(t *testing.T) {
+	sg := NewSession()
+	sg.SetDisplayScreenName(DisplayScreenName("CoolNick"))
+	sg.SetIdentScreenName(NewIdentScreenName("coolnick"))
+	i := sg.AddInstance()
+	i.Session().SetUIN(444555666)
+	assert.Equal(t, "CoolNick", i.Session().TLVUserInfo().ScreenName)
+	assert.Equal(t, "444555666", i.Session().BuddyTLVUserInfo().ScreenName)
+}
+
+func TestSession_AddInstance_SetsICQUserFlagForNumericUINDisplay(t *testing.T) {
+	sg := NewSession()
+	sg.SetDisplayScreenName(DisplayScreenName("123456789"))
+	sg.SetIdentScreenName(NewIdentScreenName("123456789"))
+	i1 := sg.AddInstance()
+	assert.Equal(t, wire.OServiceUserFlagOSCARFree|wire.OServiceUserFlagICQ, i1.UserInfoBitmask())
+	i2 := sg.AddInstance()
+	assert.Equal(t, wire.OServiceUserFlagOSCARFree|wire.OServiceUserFlagICQ, i2.UserInfoBitmask())
+}
+
 func TestSession_SetAndGetClientID(t *testing.T) {
 	s := NewSession().AddInstance()
 	assert.Empty(t, s.ClientID())
@@ -371,7 +391,6 @@ func TestSession_TLVUserInfo(t *testing.T) {
 		})
 	}
 }
-
 func TestSession_SendAndRecvMessage_ExpectSessSendOK(t *testing.T) {
 	s := NewSession().AddInstance()
 	s.SetSignonComplete()

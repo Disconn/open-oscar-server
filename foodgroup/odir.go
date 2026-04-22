@@ -72,9 +72,38 @@ func (s ODirService) InfoQuery(ctx context.Context, inFrame wire.SNACFrame, inBo
 		return response, nil
 	}
 
-	// search by name and address
-	if inBody.HasTag(wire.ODirTLVFirstName) || inBody.HasTag(wire.ODirTLVLastName) {
-		foundUsers, err := s.profileManager.FindByAIMNameAndAddr(ctx, newAIMNameAndAddrFromTLVList(inBody.TLVList))
+	firstStr, _ := inBody.String(wire.ODirTLVFirstName)
+	lastStr, _ := inBody.String(wire.ODirTLVLastName)
+	hasFirst := firstStr != ""
+	hasLast := lastStr != ""
+	addr := newAIMNameAndAddrFromTLVList(inBody.TLVList)
+
+	// ICQ (and some OSCAR builds) search by directory UIN / screen name with only TLV 0x0009.
+	if screenName, ok := inBody.String(wire.ODirTLVScreenName); ok && screenName != "" && !hasFirst && !hasLast {
+		u, err := s.profileManager.User(ctx, state.NewIdentScreenName(screenName))
+		if err != nil {
+			return wire.SNACMessage{}, fmt.Errorf("User: %w", err)
+		}
+		if u != nil {
+			response.Body = s.searchResponse([]state.User{*u})
+		} else {
+			response.Body = s.searchResponse(nil)
+		}
+		return response, nil
+	}
+
+	// search by name and address (first/last required by classic AIM rules), or nickname-only
+	// (ICQ often sends ODirTLVNickName without first/last).
+	if hasFirst || hasLast {
+		foundUsers, err := s.profileManager.FindByAIMNameAndAddr(ctx, addr)
+		if err != nil {
+			return wire.SNACMessage{}, fmt.Errorf("FindByAIMNameAndAddr: %w", err)
+		}
+		response.Body = s.searchResponse(foundUsers)
+		return response, nil
+	}
+	if addr.NickName != "" {
+		foundUsers, err := s.profileManager.FindByAIMNameAndAddr(ctx, addr)
 		if err != nil {
 			return wire.SNACMessage{}, fmt.Errorf("FindByAIMNameAndAddr: %w", err)
 		}

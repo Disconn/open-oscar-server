@@ -6,3 +6,16 @@ dist/
 certs/
 .vscode/
 .cursor/
+.claude/
+
+# Local build artifacts (repo root)
+*.exe
+*.exe~
+
+# Ad-hoc captures / dumps
+/icq-search.*
+/socks-tap.log
+
+# Local debug run (stdout/stderr from Start-Process redirect)
+/server_run.log
+/server_run_err.log

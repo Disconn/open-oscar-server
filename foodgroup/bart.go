@@ -26,10 +26,11 @@ func NewBARTService(
 	messageRelayer MessageRelayer,
 	relationshipFetcher RelationshipFetcher,
 	sessionRetriever SessionRetriever,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 ) BARTService {
 	return BARTService{
 		bartItemManager:        bartItemManager,
-		buddyUpdateBroadcaster: newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyUpdateBroadcaster: newBuddyNotifier(logger, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		messageRelayer:         messageRelayer,
 		logger:                 logger,
 	}
@@ -71,7 +72,7 @@ func (s BARTService) UpsertItem(ctx context.Context, instance *state.SessionInst
 			Body: newOServiceUserInfoUpdate(instance),
 		})
 
-		if err := s.buddyUpdateBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+		if err := s.buddyUpdateBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 			return wire.SNACMessage{}, err
 		}
 	} else {

@@ -453,6 +453,124 @@ func TestODirService_InfoQuery(t *testing.T) {
 			},
 		},
 		{
+			name: "search by screen name only (ICQ UIN)",
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 4242,
+				},
+				Body: wire.SNAC_0x0F_0x02_InfoQuery{
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							wire.NewTLVBE(wire.ODirTLVScreenName, "400000001"),
+						},
+					},
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.ODir,
+					SubGroup:  wire.ODirInfoReply,
+					RequestID: 4242,
+				},
+				Body: wire.SNAC_0x0F_0x03_InfoReply{
+					Status: wire.ODirSearchResponseOK,
+					Results: struct {
+						List []wire.TLVBlock `oscar:"count_prefix=uint16"`
+					}{List: []wire.TLVBlock{
+						{
+							TLVList: wire.TLVList{
+								wire.NewTLVBE(wire.ODirTLVFirstName, "ICQ"),
+								wire.NewTLVBE(wire.ODirTLVLastName, "User"),
+								wire.NewTLVBE(wire.ODirTLVState, "CA"),
+								wire.NewTLVBE(wire.ODirTLVCity, "LA"),
+								wire.NewTLVBE(wire.ODirTLVCountry, "US"),
+								wire.NewTLVBE(wire.ODirTLVScreenName, "icq-display"),
+							},
+						},
+					}},
+				},
+			},
+			mockParams: mockParams{
+				profileManagerParams: profileManagerParams{
+					getUserParams: getUserParams{
+						{
+							screenName: state.NewIdentScreenName("400000001"),
+							result: &state.User{
+								DisplayScreenName: state.DisplayScreenName("icq-display"),
+								AIMDirectoryInfo: state.AIMNameAndAddr{
+									FirstName: "ICQ",
+									LastName:  "User",
+									Country:   "US",
+									State:     "CA",
+									City:      "LA",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "search by nickname only",
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 5252,
+				},
+				Body: wire.SNAC_0x0F_0x02_InfoQuery{
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							wire.NewTLVBE(wire.ODirTLVNickName, "coolnick"),
+						},
+					},
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.ODir,
+					SubGroup:  wire.ODirInfoReply,
+					RequestID: 5252,
+				},
+				Body: wire.SNAC_0x0F_0x03_InfoReply{
+					Status: wire.ODirSearchResponseOK,
+					Results: struct {
+						List []wire.TLVBlock `oscar:"count_prefix=uint16"`
+					}{List: []wire.TLVBlock{
+						{
+							TLVList: wire.TLVList{
+								wire.NewTLVBE(wire.ODirTLVFirstName, "Cool"),
+								wire.NewTLVBE(wire.ODirTLVLastName, "Nick"),
+								wire.NewTLVBE(wire.ODirTLVState, "NY"),
+								wire.NewTLVBE(wire.ODirTLVCity, "NYC"),
+								wire.NewTLVBE(wire.ODirTLVCountry, "USA"),
+								wire.NewTLVBE(wire.ODirTLVScreenName, "cool123"),
+							},
+						},
+					}},
+				},
+			},
+			mockParams: mockParams{
+				profileManagerParams: profileManagerParams{
+					findByAIMNameAndAddrParams: findByAIMNameAndAddrParams{
+						{
+							info: state.AIMNameAndAddr{NickName: "coolnick"},
+							result: []state.User{
+								{
+									DisplayScreenName: state.DisplayScreenName("cool123"),
+									AIMDirectoryInfo: state.AIMNameAndAddr{
+										FirstName: "Cool",
+										LastName:  "Nick",
+										Country:   "USA",
+										State:     "NY",
+										City:      "NYC",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
 			name: "search by interest - no results found",
 			inputSNAC: wire.SNACMessage{
 				Frame: wire.SNACFrame{
@@ -505,6 +623,11 @@ func TestODirService_InfoQuery(t *testing.T) {
 			for _, params := range tc.mockParams.findByAIMKeywordParams {
 				profileManager.EXPECT().
 					FindByAIMKeyword(matchContext(), params.keyword).
+					Return(params.result, params.err)
+			}
+			for _, params := range tc.mockParams.profileManagerParams.getUserParams {
+				profileManager.EXPECT().
+					User(matchContext(), params.screenName).
 					Return(params.result, params.err)
 			}
 

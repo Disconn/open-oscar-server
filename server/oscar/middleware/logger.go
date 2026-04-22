@@ -101,6 +101,7 @@ func LogRequestError(ctx context.Context, logger *slog.Logger, inFrame wire.SNAC
 		slog.Group("request",
 			slog.String("food_group", wire.FoodGroupName(inFrame.FoodGroup)),
 			slog.String("sub_group", wire.SubGroupName(inFrame.FoodGroup, inFrame.SubGroup)),
+			slog.String("sub_group_hex", fmt.Sprintf("0x%04X", inFrame.SubGroup)),
 		),
 		slog.String("err", err.Error()),
 	)

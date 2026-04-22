@@ -328,7 +328,7 @@ func TestFeedbagService_QueryIfModified(t *testing.T) {
 }
 
 func TestFeedbagService_RightsQuery(t *testing.T) {
-	svc := NewFeedbagService(nil, nil, nil, nil, nil, nil, nil, nil)
+	svc := NewFeedbagService(nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	outputSNAC := svc.RightsQuery(context.Background(), wire.SNACFrame{RequestID: 1234})
 	expectSNAC := wire.SNACMessage{
@@ -768,6 +768,113 @@ func TestFeedbagService_UpsertItem(t *testing.T) {
 			instanceMatch: func(instance *state.SessionInstance) {
 				assert.True(t, instance.TypingEventsEnabled())
 			},
+		},
+		{
+			name:     "add ICQ buddy with leading-zero UIN normalizes filter and notifies peer",
+			instance: newTestInstance("100001", sessOptUIN(100001)),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagInsertItem,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x13_0x08_FeedbagInsertItem{
+					Items: []wire.FeedbagItem{
+						{
+							ClassID: wire.FeedbagClassIdBuddy,
+							Name:    "0365199535",
+							GroupID: 1,
+							ItemID:  2,
+						},
+					},
+				},
+			},
+			mockParams: mockParams{
+				feedbagManagerParams: feedbagManagerParams{
+					feedbagUpsertParams: feedbagUpsertParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							items: []wire.FeedbagItem{
+								{
+									ClassID: wire.FeedbagClassIdBuddy,
+									Name:    "0365199535",
+									GroupID: 1,
+									ItemID:  2,
+								},
+							},
+						},
+					},
+				},
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastVisibilityParams: broadcastVisibilityParams{
+						{
+							from: state.NewIdentScreenName("100001"),
+							filter: []state.IdentScreenName{
+								state.NewIdentScreenName("365199535"),
+							},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("365199535"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagBuddyAdded,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x1C_FeedbagBuddyAddedBody{
+									InnerLen: 6,
+									A:        1,
+									B:        2,
+									C:        2,
+									UIN:      "100001",
+								},
+							},
+						},
+					},
+					relayToOtherInstancesParams: relayToOtherInstancesParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagInsertItem,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x09_FeedbagUpdateItem{
+									Items: []wire.FeedbagItem{
+										{
+											ClassID: wire.FeedbagClassIdBuddy,
+											Name:    "0365199535",
+											GroupID: 1,
+											ItemID:  2,
+										},
+									},
+								},
+							},
+						},
+					},
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagStatus,
+									RequestID: 1234,
+								},
+								Body: wire.SNAC_0x13_0x0E_FeedbagStatus{
+									Results: []uint16{0x0000},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectOutput: nil,
 		},
 		{
 			name:     "block buddies",
@@ -1707,13 +1814,7 @@ func TestFeedbagService_UpsertItem(t *testing.T) {
 					BroadcastVisibility(mock.Anything, matchSession(params.from), params.filter, true).
 					Return(params.err)
 			}
-			userManager := newMockUserManager(t)
-			for _, params := range tc.mockParams.userManagerParams.getUserParams {
-				userManager.EXPECT().
-					User(matchContext(), params.screenName).
-					Return(params.result, params.err)
-			}
-			svc := NewFeedbagService(slog.Default(), messageRelayer, feedbagManager, bartItemManager, nil, nil, userManager, nil)
+			svc := NewFeedbagService(slog.Default(), messageRelayer, feedbagManager, bartItemManager, nil, nil, nil, nil, nil)
 			svc.buddyBroadcaster = buddyUpdateBroadcaster
 			output, err := svc.UpsertItem(context.Background(), tc.instance, tc.inputSNAC.Frame,
 				tc.inputSNAC.Body.(wire.SNAC_0x13_0x08_FeedbagInsertItem).Items)
@@ -2000,7 +2101,7 @@ func TestFeedbagService_Use(t *testing.T) {
 					Return(params.results, nil)
 			}
 
-			svc := NewFeedbagService(slog.Default(), nil, feedbagManager, nil, nil, nil, nil, nil)
+			svc := NewFeedbagService(slog.Default(), nil, feedbagManager, nil, nil, nil, nil, nil, nil)
 
 			haveErr := svc.Use(context.Background(), tt.instance)
 			assert.ErrorIs(t, tt.wantErr, haveErr)
@@ -2029,6 +2130,61 @@ func TestFeedbagService_RespondAuthorizeToHost(t *testing.T) {
 				ScreenName: "100003",
 				Accepted:   1,
 			},
+			mockParams: mockParams{
+				messageRelayerParams: messageRelayerParams{
+					relayToScreenNameParams: relayToScreenNameParams{
+						{
+							screenName: state.NewIdentScreenName("100003"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.ICBM,
+									SubGroup:  wire.ICBMChannelMsgToClient,
+								},
+								Body: wire.SNAC_0x04_0x07_ICBMChannelMsgToClient{
+									ChannelID:   wire.ICBMChannelICQ,
+									TLVUserInfo: newTestInstance("100001").Session().TLVUserInfo(),
+									TLVRestBlock: wire.TLVRestBlock{
+										TLVList: wire.TLVList{
+											wire.NewTLVLE(wire.ICBMTLVData, wire.ICBMCh4Message{
+												UIN:         100001,
+												MessageType: wire.ICBMMsgTypeAuthOK,
+											}),
+											wire.NewTLVBE(wire.ICBMTLVStore, []byte{}),
+										},
+									},
+								},
+							},
+						},
+						{
+							screenName: state.NewIdentScreenName("100003"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+								},
+								Body: wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient{
+									ScreenName: "100001",
+									Accepted:   1,
+								},
+							},
+						},
+						{
+							screenName: state.NewIdentScreenName("100001"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Feedbag,
+									SubGroup:  wire.FeedbagBuddyAdded,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x13_0x1C_FeedbagBuddyAddedBody{
+									InnerLen: 6,
+									A:        1,
+									B:        2,
+									C:        2,
+									UIN:      "100003",
+								},
+							},
+						},
 			wantHostSNAC: wire.SNAC_0x04_0x06_ICBMChannelMsgToHost{
 				ChannelID:  wire.ICBMChannelICQ,
 				ScreenName: "100003",
@@ -2076,7 +2232,7 @@ func TestFeedbagService_RespondAuthorizeToHost(t *testing.T) {
 				return nil, nil
 			}
 
-			svc := NewFeedbagService(slog.Default(), nil, nil, nil, nil, nil, nil, icbmSender)
+			svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, nil, nil, nil, nil)
 			haveErr := svc.RespondAuthorizeToHost(context.Background(), tt.instance, wire.SNACFrame{}, tt.bodyIn)
 			assert.ErrorIs(t, tt.wantErr, haveErr)
 		})
@@ -2268,7 +2424,11 @@ func TestFeedbagService_StartCluster(t *testing.T) {
 			Body:  inBody,
 		})
 
+<<<<<<< HEAD
+	svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, nil, nil, nil, nil)
+=======
 	svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, nil, nil, nil)
+>>>>>>> 267b09e540084caefd7c6f59f069f6ece35cb77d
 	svc.StartCluster(context.Background(), instance, inFrame, inBody)
 }
 
@@ -2287,6 +2447,6 @@ func TestFeedbagService_EndCluster(t *testing.T) {
 			Body:  wire.SNAC_0x13_0x12_FeedbagEndCluster{},
 		})
 
-	svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, nil, nil, nil)
+	svc := NewFeedbagService(slog.Default(), messageRelayer, nil, nil, nil, nil, nil, nil, nil)
 	svc.EndCluster(context.Background(), instance, inFrame)
 }

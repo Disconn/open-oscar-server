@@ -3,21 +3,70 @@ package foodgroup
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 
 	"github.com/mk6i/open-oscar-server/state"
 	"github.com/mk6i/open-oscar-server/wire"
 )
 
+func dedupeBuddyAdds(instance *state.SessionInstance, inBody wire.SNAC_0x03_0x04_BuddyAddBuddies) []state.IdentScreenName {
+	me := instance.IdentScreenName()
+	seen := make(map[string]struct{}, len(inBody.Buddies))
+	out := make([]state.IdentScreenName, 0, len(inBody.Buddies))
+	for _, entry := range inBody.Buddies {
+		sn := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(entry.ScreenName))
+		if sn == me {
+			continue
+		}
+		key := sn.String()
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, sn)
+	}
+	return out
+}
+
+func dedupeBuddyDels(instance *state.SessionInstance, inBody wire.SNAC_0x03_0x05_BuddyDelBuddies) []state.IdentScreenName {
+	me := instance.IdentScreenName()
+	seen := make(map[string]struct{}, len(inBody.Buddies))
+	out := make([]state.IdentScreenName, 0, len(inBody.Buddies))
+	for _, entry := range inBody.Buddies {
+		sn := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(entry.ScreenName))
+		if sn == me {
+			continue
+		}
+		key := sn.String()
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, sn)
+	}
+	return out
+}
+
 // NewBuddyService creates a new instance of BuddyService.
 func NewBuddyService(
+	logger *slog.Logger,
 	messageRelayer MessageRelayer,
 	clientSideBuddyListManager ClientSideBuddyListManager,
 	relationshipFetcher RelationshipFetcher,
 	sessionRetriever SessionRetriever,
 	bartItemManager BARTItemManager,
+	buddyUserLookup BuddyFeedbagUserLookup,
 ) *BuddyService {
 	return &BuddyService{
-		buddyBroadcaster:           newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster: newBuddyNotifier(
+			logger,
+			bartItemManager,
+			relationshipFetcher,
+			messageRelayer,
+			sessionRetriever,
+			buddyUserLookup,
+		),
 		clientSideBuddyListManager: clientSideBuddyListManager,
 	}
 }
@@ -26,6 +75,38 @@ func NewBuddyService(
 type BuddyService struct {
 	clientSideBuddyListManager ClientSideBuddyListManager
 	buddyBroadcaster           buddyBroadcaster
+}
+
+// BuddyWatcherListQuery answers SNAC(0x03,0x06). ICQ 6 expects a valid
+// BuddyWatcherListResponse; replying with SNAC error breaks presence.
+func (s *BuddyService) BuddyWatcherListQuery(_ context.Context, frameIn wire.SNACFrame) wire.SNACMessage {
+	return wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherListResponse,
+			RequestID: frameIn.RequestID,
+		},
+		Body: wire.SNAC_0x03_0x07_BuddyWatcherListResponse{
+			WatcherCount: 0,
+		},
+	}
+}
+
+// BuddyWatcherSubRequest handles SNAC(0x03,0x08). After subscribing, ICQ 6 is ready
+// to apply BuddyArrived updates; refresh visibility so online buddies are pushed.
+func (s *BuddyService) BuddyWatcherSubRequest(ctx context.Context, instance *state.SessionInstance, _ wire.SNACFrame, r io.Reader) error {
+	inBody := wire.SNAC_0x03_0x08_BuddyWatcherSubRequest{}
+	if err := wire.UnmarshalBE(&inBody, r); err != nil {
+		return err
+	}
+	filter := make([]state.IdentScreenName, 0, len(inBody.Buddies))
+	for _, b := range inBody.Buddies {
+		filter = append(filter, state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(b.ScreenName)))
+	}
+	if len(filter) == 0 {
+		return s.buddyBroadcaster.BroadcastVisibility(ctx, instance, nil, false)
+	}
+	return s.buddyBroadcaster.BroadcastVisibility(ctx, instance, filter, false)
 }
 
 // RightsQuery returns buddy list service parameters.
@@ -51,9 +132,8 @@ func (s BuddyService) RightsQuery(_ context.Context, frameIn wire.SNACFrame) wir
 
 // AddBuddies adds buddies to my client-side buddy list.
 func (s BuddyService) AddBuddies(ctx context.Context, instance *state.SessionInstance, inBody wire.SNAC_0x03_0x04_BuddyAddBuddies) error {
-
-	for _, entry := range inBody.Buddies {
-		sn := state.NewIdentScreenName(entry.ScreenName)
+	toAdd := dedupeBuddyAdds(instance, inBody)
+	for _, sn := range toAdd {
 		if err := s.clientSideBuddyListManager.AddBuddy(ctx, instance.IdentScreenName(), sn); err != nil {
 			return err
 		}
@@ -65,11 +145,10 @@ func (s BuddyService) AddBuddies(ctx context.Context, instance *state.SessionIns
 		return nil
 	}
 
-	var toNotify []state.IdentScreenName
-	for _, entry := range inBody.Buddies {
-		toNotify = append(toNotify, state.NewIdentScreenName(entry.ScreenName))
+	if len(toAdd) == 0 {
+		return nil
 	}
-	if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, toNotify, true); err != nil {
+	if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, toAdd, true); err != nil {
 		return fmt.Errorf("buddyBroadcaster.BroadcastVisibility: %w", err)
 	}
 
@@ -78,18 +157,17 @@ func (s BuddyService) AddBuddies(ctx context.Context, instance *state.SessionIns
 
 // DelBuddies deletes buddies from my client-side buddy list.
 func (s BuddyService) DelBuddies(ctx context.Context, instance *state.SessionInstance, inBody wire.SNAC_0x03_0x05_BuddyDelBuddies) error {
-
-	var toNotify []state.IdentScreenName
-
-	for _, entry := range inBody.Buddies {
-		sn := state.NewIdentScreenName(entry.ScreenName)
+	toDel := dedupeBuddyDels(instance, inBody)
+	for _, sn := range toDel {
 		if err := s.clientSideBuddyListManager.RemoveBuddy(ctx, instance.IdentScreenName(), sn); err != nil {
 			return err
 		}
-		toNotify = append(toNotify, sn)
 	}
 
-	if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, toNotify, true); err != nil {
+	if len(toDel) == 0 {
+		return nil
+	}
+	if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, toDel, true); err != nil {
 		return fmt.Errorf("buddyBroadcaster.BroadcastVisibility: %w", err)
 	}
 
@@ -137,26 +215,65 @@ func (s BuddyService) BroadcastVisibility(ctx context.Context, you *state.Sessio
 }
 
 func newBuddyNotifier(
+	logger *slog.Logger,
 	bartItemManager BARTItemManager,
 	relationshipFetcher RelationshipFetcher,
 	messageRelayer MessageRelayer,
 	sessionRetriever SessionRetriever,
+	buddyUserLookup BuddyFeedbagUserLookup,
 ) buddyNotifier {
 	return buddyNotifier{
+		logger:              logger,
 		bartItemManager:     bartItemManager,
 		relationshipFetcher: relationshipFetcher,
 		messageRelayer:      messageRelayer,
 		sessionRetriever:    sessionRetriever,
+		buddyUserLookup:     buddyUserLookup,
 	}
 }
 
 // buddyNotifier centralizes logic for sending buddy arrival and departure
 // notifications.
 type buddyNotifier struct {
+	logger              *slog.Logger
 	bartItemManager     BARTItemManager
 	relationshipFetcher RelationshipFetcher
 	messageRelayer      MessageRelayer
 	sessionRetriever    SessionRetriever
+	buddyUserLookup     BuddyFeedbagUserLookup
+}
+
+func (s buddyNotifier) retrieveLiveBuddySession(ctx context.Context, feedbagKey state.IdentScreenName) *state.Session {
+	if s.sessionRetriever == nil {
+		return nil
+	}
+	if sess := s.sessionRetriever.RetrieveSession(feedbagKey); sess != nil {
+		return sess
+	}
+	if norm := state.NormalizeICQUINBuddyKey(feedbagKey); norm.String() != feedbagKey.String() {
+		if sess := s.sessionRetriever.RetrieveSession(norm); sess != nil {
+			return sess
+		}
+	}
+	if s.buddyUserLookup == nil {
+		return nil
+	}
+	u, err := s.buddyUserLookup.UserForFeedbagBuddyKey(ctx, feedbagKey)
+	if err != nil || u == nil {
+		return nil
+	}
+	return s.sessionRetriever.RetrieveSession(u.IdentScreenName)
+}
+
+func (s buddyNotifier) canonicalBuddyIdent(ctx context.Context, feedbagKey state.IdentScreenName) state.IdentScreenName {
+	if s.buddyUserLookup == nil {
+		return feedbagKey
+	}
+	u, err := s.buddyUserLookup.UserForFeedbagBuddyKey(ctx, feedbagKey)
+	if err != nil || u == nil {
+		return feedbagKey
+	}
+	return u.IdentScreenName
 }
 
 // BroadcastBuddyArrived sends the latest user info to the user's adjacent users.
@@ -178,21 +295,93 @@ func (s buddyNotifier) BroadcastBuddyArrived(ctx context.Context, screenName sta
 		if user.YouBlock || user.BlocksYou || !user.IsOnTheirList {
 			continue
 		}
-		recipients = append(recipients, user.User)
+		recipients = append(recipients, s.canonicalBuddyIdent(ctx, user.User))
 	}
 
-	s.messageRelayer.RelayToScreenNames(ctx, recipients, wire.SNACMessage{
-		Frame: wire.SNACFrame{
-			FoodGroup: wire.Buddy,
-			SubGroup:  wire.BuddyArrived,
-			RequestID: wire.ReqIDFromServer,
-		},
-		Body: wire.SNAC_0x03_0x0B_BuddyArrived{
-			TLVUserInfo: userInfo,
-		},
-	})
+	for _, recip := range recipients {
+		ui := s.buddyArrivedTLVForRecipient(ctx, recip, screenName, userInfo)
+		s.messageRelayer.RelayToScreenName(ctx, recip, wire.SNACMessage{
+			Frame: wire.SNACFrame{
+				FoodGroup: wire.Buddy,
+				SubGroup:  wire.BuddyArrived,
+				RequestID: wire.ReqIDFromServer,
+			},
+			Body: wire.SNAC_0x03_0x0B_BuddyArrived{
+				TLVUserInfo: ui,
+			},
+		})
+	}
 
 	return nil
+}
+
+// buddyArrivedTLVForRecipient returns the TLVUserInfo to embed in a BuddyArrived
+// message for `recipient` when the buddy is `about`. It enriches the block with
+// ICQ-specific TLVs (DC info, OscarCaps, UserFlags2, ICQ external IP) only when
+// BOTH sides are ICQ:
+//   - the buddy snapshot (userInfo) carries the ICQ user flag (0x0040), and
+//   - the recipient session has the ICQ user flag set on at least one instance
+//     (or is flagged as an ICQ account at the session level).
+//
+// AIM-only recipients always receive the unmodified userInfo. No client-id
+// detection (e.g. "ICQ6 generation") is performed; the user-flag bitmask is the
+// authoritative signal.
+func (s buddyNotifier) buddyArrivedTLVForRecipient(ctx context.Context, recipient, about state.IdentScreenName, userInfo wire.TLVUserInfo) wire.TLVUserInfo {
+	if s.sessionRetriever == nil {
+		return userInfo
+	}
+	if !tlvUserInfoHasICQFlag(userInfo) {
+		return userInfo
+	}
+	recipSess := s.sessionRetriever.RetrieveSession(recipient)
+	if recipSess == nil {
+		return userInfo
+	}
+	if !sessionHasICQFlag(recipSess) {
+		return userInfo
+	}
+
+	// Recipient is confirmed ICQ. Look up the live buddy session so we can
+	// pull DC info / BOS advert when enriching. Session keys are
+	// canonical numeric UINs (see unicastBuddyArrived); callers may pass a
+	// non-normalized IdentScreenName for the same account.
+	aboutKey := state.NormalizeICQUINBuddyKey(about)
+	buddySess := s.sessionRetriever.RetrieveSession(aboutKey)
+	if buddySess == nil {
+		buddySess = s.retrieveLiveBuddySession(ctx, aboutKey)
+	}
+	var bos string
+	if buddySess != nil {
+		bos = buddySess.ICQBOSAdvertisedHostPort()
+	}
+	return maybeEnrichBuddyTLVForICQ6Viewer(true, userInfo, buddySess, bos)
+}
+
+// tlvUserInfoHasICQFlag reports whether the UserFlags TLV (0x01) of `info`
+// has the ICQ bit (0x0040) set.
+func tlvUserInfoHasICQFlag(info wire.TLVUserInfo) bool {
+	flags, ok := info.Uint16BE(wire.OServiceUserInfoUserFlags)
+	return ok && flags&wire.OServiceUserFlagICQ == wire.OServiceUserFlagICQ
+}
+
+// sessionHasICQFlag reports whether `sess` is an ICQ account at the session
+// level, or has the ICQ user flag set on at least one of its instances.
+func sessionHasICQFlag(sess *state.Session) bool {
+	if sess == nil {
+		return false
+	}
+	if sess.ICQAccount() {
+		return true
+	}
+	for _, inst := range sess.Instances() {
+		if inst == nil {
+			continue
+		}
+		if inst.UserInfoBitmask()&wire.OServiceUserFlagICQ == wire.OServiceUserFlagICQ {
+			return true
+		}
+	}
+	return false
 }
 
 func (s buddyNotifier) BroadcastBuddyDeparted(ctx context.Context, screenName state.IdentScreenName) error {
@@ -206,7 +395,14 @@ func (s buddyNotifier) BroadcastBuddyDeparted(ctx context.Context, screenName st
 		if user.YouBlock || user.BlocksYou || !user.IsOnTheirList {
 			continue
 		}
-		recipients = append(recipients, user.User)
+		recipients = append(recipients, s.canonicalBuddyIdent(ctx, user.User))
+	}
+
+	departName := screenName.String()
+	if s.sessionRetriever != nil {
+		if sess := s.sessionRetriever.RetrieveSession(screenName); sess != nil {
+			departName = sess.BuddyWireScreenName()
+		}
 	}
 
 	s.messageRelayer.RelayToScreenNames(ctx, recipients, wire.SNACMessage{
@@ -219,7 +415,7 @@ func (s buddyNotifier) BroadcastBuddyDeparted(ctx context.Context, screenName st
 			TLVUserInfo: wire.TLVUserInfo{
 				// don't include the TLV block, otherwise the AIM client fails
 				// to process the block event
-				ScreenName:   screenName.String(),
+				ScreenName:   departName,
 				WarningLevel: 0,
 				TLVBlock: wire.TLVBlock{
 					TLVList: wire.TLVList{
@@ -263,14 +459,14 @@ func (s buddyNotifier) BroadcastVisibility(
 		return fmt.Errorf("retrieving relationships: %w", err)
 	}
 
-	yourTLVInfo := you.Session().TLVUserInfo()
+	yourTLVInfo := you.Session().BuddyTLVUserInfo()
 
 	for _, relationship := range relationships {
 		if relationship.BlocksYou {
 			continue // they block you, don't send them notifications
 		}
 
-		theirSess := s.sessionRetriever.RetrieveSession(relationship.User)
+		theirSess := s.retrieveLiveBuddySession(ctx, relationship.User)
 		if theirSess == nil {
 			continue // they are offline
 		}
@@ -281,7 +477,7 @@ func (s buddyNotifier) BroadcastVisibility(
 				s.unicastBuddyArrived(ctx, yourTLVInfo, theirSess.IdentScreenName())
 			}
 			if relationship.IsOnYourList {
-				theirInfo := theirSess.TLVUserInfo()
+				theirInfo := theirSess.BuddyTLVUserInfo()
 				// tell you they're online
 				s.unicastBuddyArrived(ctx, theirInfo, you.IdentScreenName())
 			}
@@ -311,7 +507,7 @@ func (s buddyNotifier) unicastBuddyDeparted(ctx context.Context, from *state.Ses
 			TLVUserInfo: wire.TLVUserInfo{
 				// don't include the TLV block, otherwise the AIM client fails
 				// to process the block event
-				ScreenName:   from.IdentScreenName().String(),
+				ScreenName:   from.BuddyWireScreenName(),
 				WarningLevel: from.Warning(),
 			},
 		},
@@ -326,6 +522,8 @@ func (s buddyNotifier) unicastBuddyArrived(ctx context.Context, userInfo wire.TL
 	if userInfo.IsInvisible() {
 		return
 	}
+	about := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(userInfo.ScreenName))
+	ui := s.buddyArrivedTLVForRecipient(ctx, to, about, userInfo)
 	s.messageRelayer.RelayToScreenName(ctx, to, wire.SNACMessage{
 		Frame: wire.SNACFrame{
 			FoodGroup: wire.Buddy,
@@ -333,7 +531,7 @@ func (s buddyNotifier) unicastBuddyArrived(ctx context.Context, userInfo wire.TL
 			RequestID: wire.ReqIDFromServer,
 		},
 		Body: wire.SNAC_0x03_0x0B_BuddyArrived{
-			TLVUserInfo: userInfo,
+			TLVUserInfo: ui,
 		},
 	})
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestBARTInfo_HasClearIconHash(t *testing.T) {
@@ -320,6 +321,36 @@ func TestShortCapHexToUUID(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseLocateCapabilitiesTLV(t *testing.T) {
+	t.Run("empty", func(t *testing.T) {
+		got, err := ParseLocateCapabilitiesTLV(nil)
+		assert.NoError(t, err)
+		assert.Nil(t, got)
+	})
+	t.Run("full UUID block", func(t *testing.T) {
+		b := append([]byte(nil), CapSupportICQ[:]...)
+		b = append(b, CapChat[:]...)
+		got, err := ParseLocateCapabilitiesTLV(b)
+		assert.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, [16]byte(CapSupportICQ), got[0])
+		assert.Equal(t, [16]byte(CapChat), got[1])
+	})
+	t.Run("ICQ5-style short caps (uint16 BE)", func(t *testing.T) {
+		// 0x134D = CapSupportICQ, 0x134E = CapUTF8Messages
+		b := []byte{0x13, 0x4d, 0x13, 0x4e}
+		got, err := ParseLocateCapabilitiesTLV(b)
+		assert.NoError(t, err)
+		require.Len(t, got, 2)
+		assert.Equal(t, [16]byte(CapSupportICQ), got[0])
+		assert.Equal(t, [16]byte(CapUTF8Messages), got[1])
+	})
+	t.Run("reject odd length", func(t *testing.T) {
+		_, err := ParseLocateCapabilitiesTLV([]byte{0x01, 0x02, 0x03})
+		assert.Error(t, err)
+	})
 }
 
 func TestFeedbagItem_AppendOrderMembers(t *testing.T) {

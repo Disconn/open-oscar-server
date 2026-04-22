@@ -1,8 +1,11 @@
 package state
 
 import (
+	"encoding/binary"
 	"net/netip"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +90,16 @@ type Session struct {
 	initOnce      sync.Once
 	onSessCloseFn func()
 	nowFn         func() time.Time
+
+	// icqAccount is true for ICQ users (DB IsICQ), including when DisplayScreenName
+	// is a custom nickname. Used so AddInstance sets OServiceUserFlagICQ on every
+	// BOS instance (multi-session second connections skip RegisterBOSSession's
+	// per-instance SetUserInfoFlag).
+	icqAccount bool
+
+	// icqBOSAdvertisedHostPort is the listener's BOSAdvertisedHostPlain (host:port)
+	// captured at BOS connect; used only for ICQ 6-generation buddy TLV hints.
+	icqBOSAdvertisedHostPort string
 }
 
 // NewSession creates a new Session for a user.
@@ -98,6 +111,38 @@ func NewSession() *Session {
 		onSessCloseFn:    func() {},
 		nowFn:            time.Now,
 	}
+}
+
+// SetICQAccount marks the session as an ICQ account (UIN identity with optional
+// non-numeric display name). Must run before AddInstance when using a real
+// session manager so every instance gets OServiceUserFlagICQ in its bitmask.
+func (s *Session) SetICQAccount(yes bool) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.icqAccount = yes
+}
+
+// ICQAccount reports whether this session was marked as an ICQ account (UIN).
+func (s *Session) ICQAccount() bool {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.icqAccount
+}
+
+// SetICQBOSAdvertisedHostPort records the BOS listener host:port string for
+// optional ICQ 6-only TLV hints (e.g. buddy direct-connect when the peer has no
+// public IPv4). Non-IPv4 literal hosts are ignored by consumers.
+func (s *Session) SetICQBOSAdvertisedHostPort(hostPort string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.icqBOSAdvertisedHostPort = strings.TrimSpace(hostPort)
+}
+
+// ICQBOSAdvertisedHostPort returns the value set by SetICQBOSAdvertisedHostPort.
+func (s *Session) ICQBOSAdvertisedHostPort() string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.icqBOSAdvertisedHostPort
 }
 
 //
@@ -120,6 +165,15 @@ func (s *Session) AddInstance() *SessionInstance {
 		userInfoBitmask:   wire.OServiceUserFlagOSCARFree,
 		userStatusBitmask: wire.OServiceUserStatusAvailable,
 		onInstanceCloseFn: func() {},
+	}
+	// Extra BOS instances are created via Session.AddInstance() only — they skip
+	// RegisterBOSSession's SetUserInfoFlag(ICQ) on that new instance. Without
+	// ICQ in the instance bitmask, TLVUserInfo omits ICQ-specific TLVs and ICQ
+	// clients show a neutral gray flower.
+	// Read fields directly: DisplayScreenName() RLocks and would deadlock while
+	// this method holds s.mutex.
+	if s.icqAccount || s.displayScreenName.IsUIN() {
+		instance.userInfoBitmask |= wire.OServiceUserFlagICQ
 	}
 
 	s.instances[instance.instanceNum] = instance
@@ -774,6 +828,26 @@ func (s *Session) TLVUserInfo() wire.TLVUserInfo {
 	}
 }
 
+// BuddyWireScreenName is the buddy-list SNAC ScreenName field. ICQ clients match
+// buddy entries by numeric UIN in the protocol even when the visible nickname
+// differs; AIM clients expect the formatted display name (same as TLVUserInfo).
+func (s *Session) BuddyWireScreenName() string {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	if s.uin != 0 {
+		return strconv.FormatUint(uint64(s.uin), 10)
+	}
+	return string(s.displayScreenName)
+}
+
+// BuddyTLVUserInfo is like TLVUserInfo but uses BuddyWireScreenName for the
+// ScreenName field so BuddyArrived/BuddyDeparted match client buddy entries.
+func (s *Session) BuddyTLVUserInfo() wire.TLVUserInfo {
+	info := s.TLVUserInfo()
+	info.ScreenName = s.BuddyWireScreenName()
+	return info
+}
+
 // TypingEventsEnabled indicates whether the session wants to send and receive typing events.
 func (s *Session) TypingEventsEnabled() bool {
 	s.mutex.RLock()
@@ -781,6 +855,54 @@ func (s *Session) TypingEventsEnabled() bool {
 	return s.typingEventsEnabled
 }
 
+func icqIPv4U32FromHostPort(hostPort string) (uint32, bool) {
+	hostPort = strings.TrimSpace(hostPort)
+	if hostPort == "" {
+		return 0, false
+	}
+	ap, err := netip.ParseAddrPort(hostPort)
+	if err != nil {
+		return 0, false
+	}
+	addr := ap.Addr()
+	if addr.Is4In6() {
+		addr = addr.Unmap()
+	}
+	if !addr.Is4() {
+		return 0, false
+	}
+	ip4 := addr.As4()
+	return binary.BigEndian.Uint32(ip4[:]), true
+}
+
+// icqExternalIPv4U32ForUserInfo returns an IPv4 for TLV 0x0A (ICQ external IP)
+// when the session has a FLAP IPv4 remote or a BOS advert literal.
+func (s *Session) icqExternalIPv4U32ForUserInfo() (uint32, bool) {
+	for _, inst := range s.Instances() {
+		if inst == nil {
+			continue
+		}
+		ap := inst.RemoteAddr()
+		if ap == nil {
+			continue
+		}
+		addr := ap.Addr()
+		if addr.Is4In6() {
+			addr = addr.Unmap()
+		}
+		if !addr.Is4() {
+			continue
+		}
+		ip4 := addr.As4()
+		u := binary.BigEndian.Uint32(ip4[:])
+		if u != 0 {
+			return u, true
+		}
+	}
+	if u, ok := icqIPv4U32FromHostPort(s.ICQBOSAdvertisedHostPort()); ok {
+		return u, true
+	}
+	return 0, false
 // SetUsesFeedbag records that this session uses the feedbag (server-side) buddy list for this sign-on.
 func (s *Session) SetUsesFeedbag() {
 	s.mutex.Lock()
@@ -844,6 +966,9 @@ func (s *Session) userInfo() wire.TLVList {
 	// ICQ direct-connect info. The TLV is required for buddy arrival events to
 	// work in ICQ, even if the values are set to default.
 	if baseUserFlags&wire.OServiceUserFlagICQ == wire.OServiceUserFlagICQ {
+		if ext, ok := s.icqExternalIPv4U32ForUserInfo(); ok {
+			tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoICQExternalIP, ext))
+		}
 		tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoICQDC, wire.ICQDCInfo{}))
 	}
 

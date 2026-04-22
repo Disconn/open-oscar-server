@@ -2,6 +2,7 @@ package oscar
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,6 +77,11 @@ type BuddyService interface {
 	DelBuddies(_ context.Context, instance *state.SessionInstance, inBody wire.SNAC_0x03_0x05_BuddyDelBuddies) error
 	AddTempBuddies(ctx context.Context, instance *state.SessionInstance, inBody wire.SNAC_0x03_0x0F_BuddyAddTempBuddies) error
 	DelTempBuddies(ctx context.Context, instance *state.SessionInstance, inBody wire.SNAC_0x03_0x10_BuddyDelTempBuddies) error
+	// BuddyWatcherListQuery / BuddyWatcherSubRequest are required by ICQ 6; missing
+	// handlers previously returned SNAC(0x03,0x01) Invalid, breaking presence UI.
+	BuddyWatcherListQuery(ctx context.Context, inFrame wire.SNACFrame) wire.SNACMessage
+	BuddyWatcherSubRequest(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader) error
+	BroadcastVisibility(ctx context.Context, you *state.SessionInstance, filter []state.IdentScreenName, doSendDepartures bool) error
 }
 
 type ChatService interface {
@@ -115,12 +121,21 @@ type ICBMService interface {
 
 type ICQService interface {
 	DeleteMsgReq(ctx context.Context, instance *state.SessionInstance, seq uint16) error
+	// MetaTerminalAck sends SNAC(0x15,0x03) with a terminal 0x07DA/0x01AE meta block (no
+	// user row). Use for stats no-ops and unsupported meta so clients do not get SNAC(0x15,0x01).
+	MetaTerminalAck(ctx context.Context, instance *state.SessionInstance, seq uint16, success uint8) error
 	FindByICQName(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails, seq uint16) error
+	FindByICQDetailsWildcard(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails, seq uint16) error
 	FindByICQEmail(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail, seq uint16) error
+	FindByICQEmailWildcard(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail, seq uint16) error
 	FindByEmail3(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0573_DBQueryMetaReqSearchByEmail3, seq uint16) error
 	FindByICQInterests(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0533_DBQueryMetaReqSearchWhitePages, seq uint16) error
 	FindByUIN(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x051F_DBQueryMetaReqSearchByUIN, seq uint16) error
 	FindByUIN2(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0569_DBQueryMetaReqSearchByUIN2, seq uint16) error
+	FindByDirectoryQuery(ctx context.Context, instance *state.SessionInstance, rawBody []byte, seq uint16) error
+	// AckDirectoryUpdate answers ICQDBQueryMetaReqDirectoryUpdate (0x0FD2). ICQ6 sends
+	// embedded 0x05B9/0x0003 after directory self-check; a 0x01AE terminal ack confuses the client.
+	AckDirectoryUpdate(ctx context.Context, instance *state.SessionInstance, seq uint16) error
 	FindByWhitePages2(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2, seq uint16) error
 	FullUserInfo(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x051F_DBQueryMetaReqSearchByUIN, seq uint16) error
 	OfflineMsgReq(ctx context.Context, instance *state.SessionInstance, seq uint16) error

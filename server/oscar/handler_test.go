@@ -708,6 +708,135 @@ func TestHandler_BuddyRightsQuery(t *testing.T) {
 	}
 }
 
+func TestHandler_BuddyWatcherListQuery(t *testing.T) {
+	input := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherListQuery,
+			RequestID: 42,
+		},
+		Body: wire.SNAC_0x03_0x06_BuddyWatcherListQuery{},
+	}
+	output := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherListResponse,
+			RequestID: 42,
+		},
+		Body: wire.SNAC_0x03_0x07_BuddyWatcherListResponse{WatcherCount: 0},
+	}
+
+	svc := newMockBuddyService(t)
+	svc.On("BuddyWatcherListQuery", mock.Anything, input.Frame).Return(output)
+
+	h := Handler{
+		BuddyService: svc,
+		RouteLogger: middleware.RouteLogger{
+			Logger: slog.Default(),
+		},
+	}
+
+	responseWriter := newMockResponseWriter(t)
+	responseWriter.EXPECT().
+		SendSNAC(output.Frame, output.Body).
+		Return(nil)
+
+	buf := &bytes.Buffer{}
+	assert.NoError(t, wire.MarshalBE(input.Body, buf))
+
+	inst := state.NewSession().AddInstance()
+	assert.NoError(t, h.Handle(context.TODO(), wire.BOS, inst, input.Frame, buf, responseWriter, config.Listener{}))
+}
+
+func TestHandler_BuddyWatcherListQuery_rebroadcastsWhenSignonComplete(t *testing.T) {
+	input := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherListQuery,
+			RequestID: 42,
+		},
+		Body: wire.SNAC_0x03_0x06_BuddyWatcherListQuery{},
+	}
+	output := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherListResponse,
+			RequestID: 42,
+		},
+		Body: wire.SNAC_0x03_0x07_BuddyWatcherListResponse{WatcherCount: 0},
+	}
+
+	svc := newMockBuddyService(t)
+	svc.On("BuddyWatcherListQuery", mock.Anything, input.Frame).Return(output)
+	svc.On("BroadcastVisibility", mock.Anything, mock.Anything, ([]state.IdentScreenName)(nil), false).Return(nil)
+
+	h := Handler{
+		BuddyService: svc,
+		RouteLogger: middleware.RouteLogger{
+			Logger: slog.Default(),
+		},
+	}
+
+	responseWriter := newMockResponseWriter(t)
+	responseWriter.EXPECT().
+		SendSNAC(output.Frame, output.Body).
+		Return(nil)
+
+	buf := &bytes.Buffer{}
+	assert.NoError(t, wire.MarshalBE(input.Body, buf))
+
+	inst := state.NewSession().AddInstance()
+	inst.SetSignonComplete()
+	assert.NoError(t, h.Handle(context.TODO(), wire.BOS, inst, input.Frame, buf, responseWriter, config.Listener{}))
+}
+
+func TestHandler_BuddyWatcherSubRequest(t *testing.T) {
+	input := wire.SNACMessage{
+		Frame: wire.SNACFrame{
+			FoodGroup: wire.Buddy,
+			SubGroup:  wire.BuddyWatcherSubRequest,
+			RequestID: 7,
+		},
+		Body: wire.SNAC_0x03_0x08_BuddyWatcherSubRequest{},
+	}
+
+	svc := newMockBuddyService(t)
+	svc.On("BuddyWatcherSubRequest", mock.Anything, mock.Anything, input.Frame, mock.Anything).Return(nil)
+
+	h := Handler{
+		BuddyService: svc,
+		RouteLogger: middleware.RouteLogger{
+			Logger: slog.Default(),
+		},
+	}
+
+	responseWriter := newMockResponseWriter(t)
+
+	buf := &bytes.Buffer{}
+	assert.NoError(t, wire.MarshalBE(input.Body, buf))
+
+	inst := state.NewSession().AddInstance()
+	assert.NoError(t, h.Handle(context.TODO(), wire.BOS, inst, input.Frame, buf, responseWriter, config.Listener{}))
+}
+
+func TestHandler_BuddyWatcherNotification(t *testing.T) {
+	input := wire.SNACFrame{
+		FoodGroup: wire.Buddy,
+		SubGroup:  wire.BuddyWatcherNotification,
+		RequestID: 3,
+	}
+	h := Handler{
+		BuddyService: newMockBuddyService(t),
+		RouteLogger: middleware.RouteLogger{
+			Logger: slog.Default(),
+		},
+	}
+	inst := state.NewSession().AddInstance()
+	// Optional payload from client — must be drained without error.
+	buf := bytes.NewBufferString("ignored")
+	assert.NoError(t, h.Handle(context.TODO(), wire.BOS, inst, input, buf, newMockResponseWriter(t), config.Listener{}))
+}
+
 func TestHandler_BuddyAddBuddies(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -2803,6 +2932,10 @@ func TestHandler_ICQDBQuery(t *testing.T) {
 	}
 	type allMockParams struct {
 		deleteMsgReq      *mockParam
+		metaTerminalAck   *struct {
+			success uint8
+			wantErr error
+		}
 		findByDetails     *mockParam
 		findByEmail       *mockParam
 		findByEmail3      *mockParam
@@ -3569,6 +3702,12 @@ func TestHandler_ICQDBQuery(t *testing.T) {
 				},
 				seq: 1,
 			},
+			allMockParams: allMockParams{
+				metaTerminalAck: &struct {
+					success uint8
+					wantErr error
+				}{success: wire.ICQStatusCodeOK},
+			},
 		},
 		{
 			name: "unknown metadata request subtype",
@@ -3590,8 +3729,13 @@ func TestHandler_ICQDBQuery(t *testing.T) {
 						},
 					},
 				},
-				seq:     1,
-				wantErr: errUnknownICQMetaReqSubType,
+				seq: 1,
+			},
+			allMockParams: allMockParams{
+				metaTerminalAck: &struct {
+					success uint8
+					wantErr error
+				}{success: wire.ICQStatusCodeFail},
 			},
 		},
 		{
@@ -3662,8 +3806,13 @@ func TestHandler_ICQDBQuery(t *testing.T) {
 						},
 					},
 				},
-				seq:     1,
-				wantErr: errUnknownICQMetaReqType,
+				seq: 1,
+			},
+			allMockParams: allMockParams{
+				metaTerminalAck: &struct {
+					success uint8
+					wantErr error
+				}{success: wire.ICQStatusCodeFail},
 			},
 		}, // todo: add to a separate test
 	}
@@ -3672,6 +3821,10 @@ func TestHandler_ICQDBQuery(t *testing.T) {
 
 			icqService := newMockICQService(t)
 			switch {
+			case tt.allMockParams.metaTerminalAck != nil:
+				icqService.EXPECT().
+					MetaTerminalAck(mock.Anything, tt.reqParams.instance, tt.reqParams.seq, tt.allMockParams.metaTerminalAck.success).
+					Return(tt.allMockParams.metaTerminalAck.wantErr)
 			case tt.allMockParams.fullUserInfo != nil:
 				icqService.EXPECT().
 					FullUserInfo(mock.Anything, tt.reqParams.instance, tt.allMockParams.fullUserInfo.req, tt.reqParams.seq).

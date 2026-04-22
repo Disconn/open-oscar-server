@@ -192,7 +192,7 @@ func TestAdminService_ConfirmRequest(t *testing.T) {
 			}
 			for _, params := range tc.mockParams.broadcastBuddyArrivedParams {
 				buddyBroadcaster.EXPECT().
-					BroadcastBuddyArrived(mock.Anything, tc.instance.IdentScreenName(), tc.instance.Session().TLVUserInfo()).
+					BroadcastBuddyArrived(mock.Anything, tc.instance.IdentScreenName(), tc.instance.Session().BuddyTLVUserInfo()).
 					Return(params.err)
 			}
 			svc := AdminService{

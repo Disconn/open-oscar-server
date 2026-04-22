@@ -1764,6 +1764,7 @@ func TestAuthService_RegisterBOSSession(t *testing.T) {
 		ScreenName: screenName,
 	}
 	uin := state.DisplayScreenName("100003")
+	uinIdent := uin.IdentScreenName()
 	icqAuthCookie := state.ServerCookie{
 		ScreenName: uin,
 	}
@@ -1905,6 +1906,7 @@ func TestAuthService_RegisterBOSSession(t *testing.T) {
 							result: &state.User{
 								IdentScreenName:   uin.IdentScreenName(),
 								DisplayScreenName: uin,
+								IsICQ:             true,
 							},
 						},
 					},
@@ -1932,14 +1934,116 @@ func TestAuthService_RegisterBOSSession(t *testing.T) {
 				return uinMatches && flagsMatch
 			},
 		},
+		{
+			name:   "ICQ session when display name is not numeric UIN (login cookie still UIN)",
+			cookie: icqAuthCookie,
+			mockParams: mockParams{
+				sessionRegistryParams: sessionRegistryParams{
+					addSessionParams: addSessionParams{
+						{
+							screenName: state.DisplayScreenName("CoolNick"),
+							addIdent:   &uinIdent,
+							result: newTestInstance(uin,
+								sessOptICQDisplayNickname(state.DisplayScreenName("CoolNick")),
+								sessOptUIN(100003),
+							),
+						},
+					},
+				},
+				userManagerParams: userManagerParams{
+					getUserParams: getUserParams{
+						{
+							screenName: uin.IdentScreenName(),
+							result: &state.User{
+								IdentScreenName:   uin.IdentScreenName(),
+								DisplayScreenName: state.DisplayScreenName("CoolNick"),
+								IsICQ:             true,
+							},
+						},
+					},
+				},
+				accountManagerParams: accountManagerParams{
+					accountManagerConfirmStatusParams: accountManagerConfirmStatusParams{
+						{
+							screenName:    uin.IdentScreenName(),
+							confirmStatus: true,
+						},
+					},
+				},
+				bartItemManagerParams: bartItemManagerParams{
+					buddyIconMetadataParams: buddyIconMetadataParams{
+						{
+							screenName: uin.IdentScreenName(),
+							result:     nil,
+						},
+					},
+				},
+			},
+			wantSess: func(instance *state.SessionInstance) bool {
+				return instance.UIN() == 100003 &&
+					instance.Session().AllUserInfoBitmask(wire.OServiceUserFlagICQ)
+			},
+		},
+		{
+			name: "ICQ UIN session when DB isICQ is false (legacy row) but ident is numeric UIN",
+			cookie: state.ServerCookie{
+				ScreenName: state.DisplayScreenName("123456789"),
+			},
+			mockParams: mockParams{
+				sessionRegistryParams: sessionRegistryParams{
+					addSessionParams: addSessionParams{
+						{
+							screenName: state.DisplayScreenName("123456789"),
+							result:     newTestInstance("123456789"),
+						},
+					},
+				},
+				userManagerParams: userManagerParams{
+					getUserParams: getUserParams{
+						{
+							screenName: state.NewIdentScreenName("123456789"),
+							result: &state.User{
+								IdentScreenName:   state.NewIdentScreenName("123456789"),
+								DisplayScreenName: state.DisplayScreenName("123456789"),
+								IsICQ:             false,
+							},
+						},
+					},
+				},
+				accountManagerParams: accountManagerParams{
+					accountManagerConfirmStatusParams: accountManagerConfirmStatusParams{
+						{
+							screenName:    state.NewIdentScreenName("123456789"),
+							confirmStatus: true,
+						},
+					},
+				},
+				bartItemManagerParams: bartItemManagerParams{
+					buddyIconMetadataParams: buddyIconMetadataParams{
+						{
+							screenName: state.NewIdentScreenName("123456789"),
+							result:     nil,
+						},
+					},
+				},
+			},
+			wantSess: func(instance *state.SessionInstance) bool {
+				return instance.UIN() == 123456789 &&
+					instance.Session().AllUserInfoBitmask(wire.OServiceUserFlagICQ)
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sessionRegistry := newMockSessionRegistry(t)
 			for _, params := range tc.mockParams.addSessionParams {
+				wantIdent := params.screenName.IdentScreenName()
+				if params.addIdent != nil {
+					wantIdent = *params.addIdent
+				}
 				sessionRegistry.EXPECT().
-					AddSession(mock.Anything, params.screenName, params.doMultiSess, mock.Anything, mock.Anything).
+					AddSessionWithIdent(mock.Anything, params.screenName, wantIdent, params.doMultiSess, mock.Anything, mock.Anything, mock.Anything).
 					Return(params.result, params.err)
 			}
 			userManager := newMockUserManager(t)

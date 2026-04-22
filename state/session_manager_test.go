@@ -54,6 +54,28 @@ func TestInMemorySessionManager_AddSession_AppliesCfgToSession(t *testing.T) {
 	assert.Equal(t, wantCookie, s.ChatRoomCookie())
 }
 
+// ICQ-style: visible nickname differs from canonical UIN ident. Multi-session
+// must find the existing session by UIN, not by nickname-derived ident.
+func TestInMemorySessionManager_AddSessionWithIdent_MultiConnByUIN(t *testing.T) {
+	sm := NewInMemorySessionManager(slog.Default())
+	ctx := context.Background()
+	display := DisplayScreenName("CoolNick")
+	uinIdent := NewIdentScreenName("100003")
+	cfgICQ := func(sess *Session) { sess.SetICQAccount(true) }
+
+	i1, err := sm.AddSessionWithIdent(ctx, display, uinIdent, true, cfgICQ)
+	require.NoError(t, err)
+	i1.SetSignonComplete()
+	require.Equal(t, uinIdent, i1.Session().IdentScreenName())
+	require.Equal(t, display, i1.Session().DisplayScreenName())
+	require.NotNil(t, sm.RetrieveSession(uinIdent))
+
+	i2, err := sm.AddSessionWithIdent(ctx, display, uinIdent, true, cfgICQ)
+	require.NoError(t, err)
+	require.Same(t, i1.Session(), i2.Session())
+	require.Equal(t, 2, i2.Session().InstanceCount())
+}
+
 func TestInMemorySessionManager_AddSession_Timeout(t *testing.T) {
 	sm := NewInMemorySessionManager(slog.Default())
 

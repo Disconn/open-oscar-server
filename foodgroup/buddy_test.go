@@ -1,6 +1,7 @@
 package foodgroup
 
 import (
+	"bytes"
 	"context"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 )
 
 func TestBuddyService_RightsQuery(t *testing.T) {
-	svc := NewBuddyService(nil, nil, nil, nil, nil)
+	svc := NewBuddyService(nil, nil, nil, nil, nil, nil, nil)
 
 	want := wire.SNACMessage{
 		Frame: wire.SNACFrame{
@@ -34,6 +35,16 @@ func TestBuddyService_RightsQuery(t *testing.T) {
 	have := svc.RightsQuery(nil, wire.SNACFrame{RequestID: 1234})
 
 	assert.Equal(t, want, have)
+}
+
+func TestBuddyService_BuddyWatcherListQuery(t *testing.T) {
+	svc := NewBuddyService(nil, nil, nil, nil, nil, nil, nil)
+	out := svc.BuddyWatcherListQuery(context.Background(), wire.SNACFrame{RequestID: 99})
+	assert.Equal(t, wire.Buddy, out.Frame.FoodGroup)
+	assert.Equal(t, wire.BuddyWatcherListResponse, out.Frame.SubGroup)
+	assert.Equal(t, uint32(99), out.Frame.RequestID)
+	body := out.Body.(wire.SNAC_0x03_0x07_BuddyWatcherListResponse)
+	assert.Equal(t, uint16(0), body.WatcherCount)
 }
 
 func TestBuddyService_AddBuddies(t *testing.T) {
@@ -146,6 +157,53 @@ func TestBuddyService_AddBuddies(t *testing.T) {
 			assert.ErrorIs(t, tt.wantErr, haveErr)
 		})
 	}
+}
+
+func TestBuddyService_AddBuddies_dedupesAndSkipsSelf(t *testing.T) {
+	instance := newTestInstance("alice", sessOptSignonComplete)
+	body := wire.SNAC_0x03_0x04_BuddyAddBuddies{
+		Buddies: []struct {
+			ScreenName string `oscar:"len_prefix=uint8"`
+		}{
+			{ScreenName: "alice"},
+			{ScreenName: "bob"},
+			{ScreenName: "bob"},
+		},
+	}
+
+	clientSide := newMockClientSideBuddyListManager(t)
+	clientSide.EXPECT().
+		AddBuddy(matchContext(), state.NewIdentScreenName("alice"), state.NewIdentScreenName("bob")).
+		Return(nil)
+
+	broadcaster := newMockbuddyBroadcaster(t)
+	broadcaster.EXPECT().
+		BroadcastVisibility(matchContext(), matchSession(state.NewIdentScreenName("alice")), []state.IdentScreenName{state.NewIdentScreenName("bob")}, true).
+		Return(nil)
+
+	svc := BuddyService{
+		clientSideBuddyListManager: clientSide,
+		buddyBroadcaster:           broadcaster,
+	}
+	assert.NoError(t, svc.AddBuddies(context.Background(), instance, body))
+}
+
+func TestBuddyService_AddBuddies_selfOnlyNoOps(t *testing.T) {
+	instance := newTestInstance("alice", sessOptSignonComplete)
+	body := wire.SNAC_0x03_0x04_BuddyAddBuddies{
+		Buddies: []struct {
+			ScreenName string `oscar:"len_prefix=uint8"`
+		}{{ScreenName: "alice"}},
+	}
+	clientSide := newMockClientSideBuddyListManager(t)
+	broadcaster := newMockbuddyBroadcaster(t)
+	svc := BuddyService{
+		clientSideBuddyListManager: clientSide,
+		buddyBroadcaster:           broadcaster,
+	}
+	assert.NoError(t, svc.AddBuddies(context.Background(), instance, body))
+	clientSide.AssertNotCalled(t, "AddBuddy")
+	broadcaster.AssertNotCalled(t, "BroadcastVisibility")
 }
 
 func TestBuddyService_DelBuddies(t *testing.T) {
@@ -485,12 +543,22 @@ func TestBuddyNotifier_BroadcastBuddyArrived(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNamesParams: relayToScreenNamesParams{
+					relayToScreenNameParams: relayToScreenNameParams{
 						{
-							screenNames: []state.IdentScreenName{
-								state.NewIdentScreenName("friend1-visible"),
-								state.NewIdentScreenName("friend2-visible"),
+							screenName: state.NewIdentScreenName("friend1-visible"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.Buddy,
+									SubGroup:  wire.BuddyArrived,
+									RequestID: wire.ReqIDFromServer,
+								},
+								Body: wire.SNAC_0x03_0x0B_BuddyArrived{
+									TLVUserInfo: wire.TLVUserInfo{ScreenName: "me"},
+								},
 							},
+						},
+						{
+							screenName: state.NewIdentScreenName("friend2-visible"),
 							message: wire.SNACMessage{
 								Frame: wire.SNACFrame{
 									FoodGroup: wire.Buddy,
@@ -522,7 +590,7 @@ func TestBuddyNotifier_BroadcastBuddyArrived(t *testing.T) {
 					allRelationshipsParams: allRelationshipsParams{}, // don't look up relationships
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNamesParams: relayToScreenNamesParams{}, // don't send notification
+					relayToScreenNameParams: relayToScreenNameParams{}, // don't send notification
 				},
 			},
 		},
@@ -537,9 +605,9 @@ func TestBuddyNotifier_BroadcastBuddyArrived(t *testing.T) {
 					Return(params.result, params.err)
 			}
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tc.mockParams.relayToScreenNamesParams {
+			for _, params := range tc.mockParams.relayToScreenNameParams {
 				messageRelayer.EXPECT().
-					RelayToScreenNames(matchContext(), params.screenNames, params.message)
+					RelayToScreenName(matchContext(), params.screenName, params.message)
 			}
 
 			svc := buddyNotifier{
@@ -551,6 +619,136 @@ func TestBuddyNotifier_BroadcastBuddyArrived(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func Test_buddyNotifier_buddyArrivedTLVForRecipient_ICQRecipientEnriches(t *testing.T) {
+	ctx := context.Background()
+	recip := state.NewIdentScreenName("111")
+	buddy := state.NewIdentScreenName("222")
+	buddyKey := state.NormalizeICQUINBuddyKey(buddy)
+
+	recipSess := state.NewSession()
+	recipSess.SetIdentScreenName(recip)
+	recipInst := recipSess.AddInstance()
+	recipInst.SetUserInfoFlag(wire.OServiceUserFlagICQ)
+
+	ret := newMockSessionRetriever(t)
+	ret.EXPECT().RetrieveSession(recip).Return(recipSess)
+	ret.EXPECT().RetrieveSession(buddyKey).Return(nil)
+
+	base := wire.TLVUserInfo{
+		ScreenName: "222",
+		TLVBlock: wire.TLVBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(wire.OServiceUserFlagICQ)),
+			},
+		},
+	}
+	n := buddyNotifier{sessionRetriever: ret}
+	out := n.buddyArrivedTLVForRecipient(ctx, recip, buddy, base)
+	assert.True(t, out.HasTag(wire.OServiceUserInfoUserFlags2))
+	raw, ok := out.Bytes(wire.OServiceUserInfoOscarCaps)
+	assert.True(t, ok)
+	assert.True(t, bytes.Contains(raw, wire.CapSupportICQ[:]))
+}
+
+func Test_buddyNotifier_buddyArrivedTLVForRecipient_ICQRecipientByICQAccountOnly(t *testing.T) {
+	ctx := context.Background()
+	recip := state.NewIdentScreenName("alice_icq")
+	buddy := state.NewIdentScreenName("222")
+	buddyKey := state.NormalizeICQUINBuddyKey(buddy)
+
+	recipSess := state.NewSession()
+	recipSess.SetICQAccount(true)
+	recipSess.SetIdentScreenName(recip)
+	recipSess.SetDisplayScreenName("Pretty Name")
+	recipSess.AddInstance()
+
+	ret := newMockSessionRetriever(t)
+	ret.EXPECT().RetrieveSession(recip).Return(recipSess)
+	ret.EXPECT().RetrieveSession(buddyKey).Return(nil)
+
+	base := wire.TLVUserInfo{
+		ScreenName: "222",
+		TLVBlock: wire.TLVBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(wire.OServiceUserFlagICQ)),
+			},
+		},
+	}
+	n := buddyNotifier{sessionRetriever: ret}
+	out := n.buddyArrivedTLVForRecipient(ctx, recip, buddy, base)
+	assert.True(t, out.HasTag(wire.OServiceUserInfoUserFlags2))
+	raw, ok := out.Bytes(wire.OServiceUserInfoOscarCaps)
+	assert.True(t, ok)
+	assert.True(t, bytes.Contains(raw, wire.CapSupportICQ[:]))
+}
+
+func Test_buddyNotifier_buddyArrivedTLVForRecipient_nonICQRecipientNoEnrichment(t *testing.T) {
+	ctx := context.Background()
+	recip := state.NewIdentScreenName("aimuser")
+	buddy := state.NewIdentScreenName("222")
+
+	recipSess := state.NewSession()
+	recipSess.SetIdentScreenName(recip)
+	recipSess.AddInstance()
+
+	ret := newMockSessionRetriever(t)
+	ret.EXPECT().RetrieveSession(recip).Return(recipSess)
+
+	base := wire.TLVUserInfo{
+		ScreenName: "222",
+		TLVBlock: wire.TLVBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(wire.OServiceUserFlagICQ)),
+			},
+		},
+	}
+	n := buddyNotifier{sessionRetriever: ret}
+	out := n.buddyArrivedTLVForRecipient(ctx, recip, buddy, base)
+	assert.False(t, out.HasTag(wire.OServiceUserInfoUserFlags2))
+}
+
+func Test_buddyNotifier_buddyArrivedTLVForRecipient_nonICQBuddyNoEnrichment(t *testing.T) {
+	ctx := context.Background()
+	recip := state.NewIdentScreenName("111")
+	buddy := state.NewIdentScreenName("buddy")
+
+	base := wire.TLVUserInfo{
+		ScreenName: "buddy",
+		TLVBlock: wire.TLVBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(0)),
+			},
+		},
+	}
+	// Buddy TLV is not ICQ-flagged: returns before any session lookup.
+	n := buddyNotifier{sessionRetriever: newMockSessionRetriever(t)}
+	out := n.buddyArrivedTLVForRecipient(ctx, recip, buddy, base)
+	assert.False(t, out.HasTag(wire.OServiceUserInfoUserFlags2))
+}
+
+func Test_buddyNotifier_buddyArrivedTLVForRecipient_unknownRecipientNoEnrichment(t *testing.T) {
+	ctx := context.Background()
+	recip := state.NewIdentScreenName("ghost")
+	buddy := state.NewIdentScreenName("222")
+
+	ret := newMockSessionRetriever(t)
+	ret.EXPECT().RetrieveSession(recip).Return(nil)
+
+	base := wire.TLVUserInfo{
+		ScreenName: "222",
+		TLVBlock: wire.TLVBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(wire.OServiceUserFlagICQ)),
+			},
+		},
+	}
+	// Recipient session is gone (e.g. logged out mid-broadcast): no enrichment
+	// and no further lookups.
+	n := buddyNotifier{sessionRetriever: ret}
+	out := n.buddyArrivedTLVForRecipient(ctx, recip, buddy, base)
+	assert.False(t, out.HasTag(wire.OServiceUserInfoUserFlags2))
 }
 
 func TestBuddyService_BroadcastDeparture(t *testing.T) {

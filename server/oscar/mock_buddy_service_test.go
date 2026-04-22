@@ -6,6 +6,7 @@ package oscar
 
 import (
 	"context"
+	"io"
 
 	"github.com/mk6i/open-oscar-server/state"
 	"github.com/mk6i/open-oscar-server/wire"
@@ -346,4 +347,55 @@ func (_c *mockBuddyService_RightsQuery_Call) Return(sNACMessage wire.SNACMessage
 func (_c *mockBuddyService_RightsQuery_Call) RunAndReturn(run func(ctx context.Context, inFrame wire.SNACFrame) wire.SNACMessage) *mockBuddyService_RightsQuery_Call {
 	_c.Call.Return(run)
 	return _c
+}
+
+// BuddyWatcherListQuery provides a mock function for the type mockBuddyService
+func (_mock *mockBuddyService) BuddyWatcherListQuery(ctx context.Context, inFrame wire.SNACFrame) wire.SNACMessage {
+	ret := _mock.Called(ctx, inFrame)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BuddyWatcherListQuery")
+	}
+
+	var r0 wire.SNACMessage
+	if returnFunc, ok := ret.Get(0).(func(context.Context, wire.SNACFrame) wire.SNACMessage); ok {
+		r0 = returnFunc(ctx, inFrame)
+	} else {
+		r0 = ret.Get(0).(wire.SNACMessage)
+	}
+	return r0
+}
+
+// BuddyWatcherSubRequest provides a mock function for the type mockBuddyService
+func (_mock *mockBuddyService) BuddyWatcherSubRequest(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, r io.Reader) error {
+	ret := _mock.Called(ctx, instance, inFrame, r)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BuddyWatcherSubRequest")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, wire.SNACFrame, io.Reader) error); ok {
+		r0 = returnFunc(ctx, instance, inFrame, r)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// BroadcastVisibility provides a mock function for the type mockBuddyService
+func (_mock *mockBuddyService) BroadcastVisibility(ctx context.Context, you *state.SessionInstance, filter []state.IdentScreenName, doSendDepartures bool) error {
+	ret := _mock.Called(ctx, you, filter, doSendDepartures)
+
+	if len(ret) == 0 {
+		panic("no return value specified for BroadcastVisibility")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, []state.IdentScreenName, bool) error); ok {
+		r0 = returnFunc(ctx, you, filter, doSendDepartures)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }

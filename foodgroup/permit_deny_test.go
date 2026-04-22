@@ -11,7 +11,7 @@ import (
 )
 
 func TestPermitDenyService_RightsQuery(t *testing.T) {
-	svc := NewPermitDenyService(nil, nil, nil, nil, nil)
+	svc := NewPermitDenyService(nil, nil, nil, nil, nil, nil)
 
 	have := svc.RightsQuery(nil, wire.SNACFrame{RequestID: 1234})
 	want := wire.SNACMessage{

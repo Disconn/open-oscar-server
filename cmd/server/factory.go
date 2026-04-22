@@ -92,6 +92,7 @@ func MakeCommonDeps() (Container, error) {
 		c.sqLiteUserStore,
 		c.snacRateLimits,
 		c.logger,
+		c.sqLiteUserStore,
 	)
 
 	c.feedbagSvc = foodgroup.NewFeedbagService(
@@ -236,6 +237,7 @@ func OSCAR(deps Container) *oscar.Server {
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 		deps.logger,
 	)
 	authService := foodgroup.NewAuthService(
@@ -258,22 +260,37 @@ func OSCAR(deps Container) *oscar.Server {
 		deps.inMemorySessionManager,
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 	)
 	buddyService := foodgroup.NewBuddyService(
+		logger,
 		deps.inMemorySessionManager,
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 	)
 	chatService := foodgroup.NewChatService(deps.chatSessionManager)
 	chatNavService := foodgroup.NewChatNavService(logger, deps.sqLiteUserStore)
+	feedbagService := foodgroup.NewFeedbagService(
+		logger,
+		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
+		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
+	)
 	permitDenyService := foodgroup.NewPermitDenyService(
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 	)
 	icqService := foodgroup.NewICQService(
 		deps.inMemorySessionManager,
@@ -291,6 +308,7 @@ func OSCAR(deps Container) *oscar.Server {
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
 		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
 	)
 	oServiceService := foodgroup.NewOServiceService(
 		deps.cfg,
@@ -303,6 +321,9 @@ func OSCAR(deps Container) *oscar.Server {
 		deps.sqLiteUserStore,
 		deps.snacRateLimits,
 		deps.chatSessionManager,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
+		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 	)
@@ -378,10 +399,12 @@ func MgmtAPI(deps Container) *http.Server {
 	}
 	logger := deps.logger.With("svc", "API")
 	buddyService := foodgroup.NewBuddyService(
+		logger,
 		deps.inMemorySessionManager,
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 	)
 	return http.NewManagementAPI(
@@ -422,6 +445,7 @@ func TOC(deps Container) *toc.Server {
 				deps.sqLiteUserStore,
 				deps.inMemorySessionManager,
 				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
 				deps.logger,
 			),
 			AuthService: foodgroup.NewAuthService(
@@ -440,10 +464,12 @@ func TOC(deps Container) *toc.Server {
 			),
 			BuddyListRegistry: deps.sqLiteUserStore,
 			BuddyService: foodgroup.NewBuddyService(
+				logger,
 				deps.inMemorySessionManager,
 				deps.sqLiteUserStore,
 				deps.sqLiteUserStore,
 				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
 				deps.sqLiteUserStore,
 			),
 			ChatSessionManager: deps.chatSessionManager,
@@ -456,6 +482,7 @@ func TOC(deps Container) *toc.Server {
 				deps.sqLiteUserStore,
 				deps.sqLiteUserStore,
 				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
 				deps.sqLiteUserStore,
 			),
 			Logger: logger,
@@ -472,6 +499,9 @@ func TOC(deps Container) *toc.Server {
 				deps.chatSessionManager,
 				deps.sqLiteUserStore,
 				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
 			),
 			PermitDenyService: foodgroup.NewPermitDenyService(
 				deps.sqLiteUserStore,
@@ -479,12 +509,23 @@ func TOC(deps Container) *toc.Server {
 				deps.sqLiteUserStore,
 				deps.inMemorySessionManager,
 				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
 			),
-			TOCConfigStore:    deps.sqLiteUserStore,
-			ChatService:       foodgroup.NewChatService(deps.chatSessionManager),
-			ChatNavService:    foodgroup.NewChatNavService(logger, deps.sqLiteUserStore),
-			FeedbagManager:    deps.sqLiteUserStore,
-			FeedbagService:    deps.feedbagSvc,
+			TOCConfigStore: deps.sqLiteUserStore,
+			ChatService:    foodgroup.NewChatService(deps.chatSessionManager),
+			ChatNavService: foodgroup.NewChatNavService(logger, deps.sqLiteUserStore),
+			FeedbagManager: deps.sqLiteUserStore,
+			FeedbagService: foodgroup.NewFeedbagService(
+				logger,
+				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+				deps.inMemorySessionManager,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+				deps.sqLiteUserStore,
+			),
 			SNACRateLimits:    deps.snacRateLimits,
 			HTTPIPRateLimiter: toc.NewIPRateLimiter(rate.Every(1*time.Minute), 10, 1*time.Minute),
 			SessionRetriever:  deps.inMemorySessionManager,
@@ -514,10 +555,12 @@ func WebAPI(deps Container) *webapi.Server {
 
 	// Create the OSCAR buddy broadcaster for WebAPI to use
 	oscarBuddyBroadcaster := foodgroup.NewBuddyService(
+		logger,
 		deps.inMemorySessionManager,
 		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 		deps.inMemorySessionManager,
+		deps.sqLiteUserStore,
 		deps.sqLiteUserStore,
 	)
 
@@ -528,6 +571,7 @@ func WebAPI(deps Container) *webapi.Server {
 			deps.sqLiteUserStore,
 			deps.inMemorySessionManager,
 			deps.inMemorySessionManager,
+			deps.sqLiteUserStore,
 			deps.logger,
 		),
 		AuthService: foodgroup.NewAuthService(
@@ -546,10 +590,12 @@ func WebAPI(deps Container) *webapi.Server {
 		),
 		BuddyListRegistry: deps.sqLiteUserStore,
 		BuddyService: foodgroup.NewBuddyService(
+			logger,
 			deps.inMemorySessionManager,
 			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 			deps.inMemorySessionManager,
+			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 		),
 		CookieBaker:      deps.hmacCookieBaker,
@@ -561,6 +607,7 @@ func WebAPI(deps Container) *webapi.Server {
 			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 			deps.inMemorySessionManager,
+			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 		),
 		Logger: logger,
@@ -577,6 +624,9 @@ func WebAPI(deps Container) *webapi.Server {
 			deps.chatSessionManager,
 			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
+			deps.sqLiteUserStore,
+			deps.sqLiteUserStore,
+			deps.sqLiteUserStore,
 		),
 		PermitDenyService: foodgroup.NewPermitDenyService(
 			deps.sqLiteUserStore,
@@ -584,6 +634,7 @@ func WebAPI(deps Container) *webapi.Server {
 			deps.sqLiteUserStore,
 			deps.inMemorySessionManager,
 			deps.inMemorySessionManager,
+			deps.sqLiteUserStore,
 		),
 		TOCConfigStore: deps.sqLiteUserStore,
 		ChatService:    foodgroup.NewChatService(deps.chatSessionManager),
@@ -635,10 +686,12 @@ func ICQLegacy(deps Container) *icq_legacy.LegacyServer {
 		deps.inMemorySessionManager, // sessionRetriever
 		deps.inMemorySessionManager, // messageRelayer
 		foodgroup.NewBuddyService( // buddyBroadcaster
+			logger,
 			deps.inMemorySessionManager,
 			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 			deps.inMemorySessionManager,
+			deps.sqLiteUserStore,
 			deps.sqLiteUserStore,
 		),
 		deps.sqLiteUserStore, // offlineMessageManager

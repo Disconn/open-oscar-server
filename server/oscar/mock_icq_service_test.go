@@ -171,6 +171,125 @@ func (_c *mockICQService_FindByEmail3_Call) RunAndReturn(run func(ctx context.Co
 	return _c
 }
 
+// FindByDirectoryQuery provides a mock function for the type mockICQService
+func (_mock *mockICQService) FindByDirectoryQuery(ctx context.Context, instance *state.SessionInstance, rawBody []byte, seq uint16) error {
+	ret := _mock.Called(ctx, instance, rawBody, seq)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FindByDirectoryQuery")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, []byte, uint16) error); ok {
+		r0 = returnFunc(ctx, instance, rawBody, seq)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// mockICQService_FindByDirectoryQuery_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindByDirectoryQuery'
+type mockICQService_FindByDirectoryQuery_Call struct {
+	*mock.Call
+}
+
+// FindByDirectoryQuery is a helper method to define mock.On call
+//   - ctx context.Context
+//   - instance *state.SessionInstance
+//   - rawBody []byte
+//   - seq uint16
+func (_e *mockICQService_Expecter) FindByDirectoryQuery(ctx interface{}, instance interface{}, rawBody interface{}, seq interface{}) *mockICQService_FindByDirectoryQuery_Call {
+	return &mockICQService_FindByDirectoryQuery_Call{Call: _e.mock.On("FindByDirectoryQuery", ctx, instance, rawBody, seq)}
+}
+
+func (_c *mockICQService_FindByDirectoryQuery_Call) Run(run func(ctx context.Context, instance *state.SessionInstance, rawBody []byte, seq uint16)) *mockICQService_FindByDirectoryQuery_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *state.SessionInstance
+		if args[1] != nil {
+			arg1 = args[1].(*state.SessionInstance)
+		}
+		var arg2 []byte
+		if args[2] != nil {
+			arg2 = args[2].([]byte)
+		}
+		var arg3 uint16
+		if args[3] != nil {
+			arg3 = args[3].(uint16)
+		}
+		run(arg0, arg1, arg2, arg3)
+	})
+	return _c
+}
+
+func (_c *mockICQService_FindByDirectoryQuery_Call) Return(err error) *mockICQService_FindByDirectoryQuery_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *mockICQService_FindByDirectoryQuery_Call) RunAndReturn(run func(ctx context.Context, instance *state.SessionInstance, rawBody []byte, seq uint16) error) *mockICQService_FindByDirectoryQuery_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// AckDirectoryUpdate provides a mock function for the type mockICQService
+func (_mock *mockICQService) AckDirectoryUpdate(ctx context.Context, instance *state.SessionInstance, seq uint16) error {
+	ret := _mock.Called(ctx, instance, seq)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AckDirectoryUpdate")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, uint16) error); ok {
+		r0 = returnFunc(ctx, instance, seq)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// mockICQService_AckDirectoryUpdate_Call is a *mock.Call that shadows Run/Return methods for AckDirectoryUpdate
+type mockICQService_AckDirectoryUpdate_Call struct {
+	*mock.Call
+}
+
+func (_e *mockICQService_Expecter) AckDirectoryUpdate(ctx interface{}, instance interface{}, seq interface{}) *mockICQService_AckDirectoryUpdate_Call {
+	return &mockICQService_AckDirectoryUpdate_Call{Call: _e.mock.On("AckDirectoryUpdate", ctx, instance, seq)}
+}
+
+func (_c *mockICQService_AckDirectoryUpdate_Call) Run(run func(ctx context.Context, instance *state.SessionInstance, seq uint16)) *mockICQService_AckDirectoryUpdate_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 *state.SessionInstance
+		if args[1] != nil {
+			arg1 = args[1].(*state.SessionInstance)
+		}
+		var arg2 uint16
+		if args[2] != nil {
+			arg2 = args[2].(uint16)
+		}
+		run(arg0, arg1, arg2)
+	})
+	return _c
+}
+
+func (_c *mockICQService_AckDirectoryUpdate_Call) Return(err error) *mockICQService_AckDirectoryUpdate_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *mockICQService_AckDirectoryUpdate_Call) RunAndReturn(run func(ctx context.Context, instance *state.SessionInstance, seq uint16) error) *mockICQService_AckDirectoryUpdate_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // FindByICQEmail provides a mock function for the type mockICQService
 func (_mock *mockICQService) FindByICQEmail(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail, seq uint16) error {
 	ret := _mock.Called(ctx, instance, inBody, seq)
@@ -376,6 +495,36 @@ func (_c *mockICQService_FindByICQName_Call) Return(err error) *mockICQService_F
 func (_c *mockICQService_FindByICQName_Call) RunAndReturn(run func(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails, seq uint16) error) *mockICQService_FindByICQName_Call {
 	_c.Call.Return(run)
 	return _c
+}
+
+// FindByICQDetailsWildcard provides a mock function for the type mockICQService
+func (_mock *mockICQService) FindByICQDetailsWildcard(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails, seq uint16) error {
+	ret := _mock.Called(ctx, instance, inBody, seq)
+	if len(ret) == 0 {
+		panic("no return value specified for FindByICQDetailsWildcard")
+	}
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, wire.ICQ_0x07D0_0x0515_DBQueryMetaReqSearchByDetails, uint16) error); ok {
+		r0 = returnFunc(ctx, instance, inBody, seq)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// FindByICQEmailWildcard provides a mock function for the type mockICQService
+func (_mock *mockICQService) FindByICQEmailWildcard(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail, seq uint16) error {
+	ret := _mock.Called(ctx, instance, inBody, seq)
+	if len(ret) == 0 {
+		panic("no return value specified for FindByICQEmailWildcard")
+	}
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, wire.ICQ_0x07D0_0x0529_DBQueryMetaReqSearchByEmail, uint16) error); ok {
+		r0 = returnFunc(ctx, instance, inBody, seq)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
 }
 
 // FindByUIN provides a mock function for the type mockICQService
@@ -1472,6 +1621,47 @@ func (_c *mockICQService_XMLReqData_Call) Return(err error) *mockICQService_XMLR
 }
 
 func (_c *mockICQService_XMLReqData_Call) RunAndReturn(run func(ctx context.Context, instance *state.SessionInstance, inBody wire.ICQ_0x07D0_0x0898_DBQueryMetaReqXMLReq, seq uint16) error) *mockICQService_XMLReqData_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// MetaTerminalAck provides a mock function for the type mockICQService
+func (_mock *mockICQService) MetaTerminalAck(ctx context.Context, instance *state.SessionInstance, seq uint16, success uint8) error {
+	ret := _mock.Called(ctx, instance, seq, success)
+
+	if len(ret) == 0 {
+		panic("no return value specified for MetaTerminalAck")
+	}
+
+	var r0 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, *state.SessionInstance, uint16, uint8) error); ok {
+		r0 = returnFunc(ctx, instance, seq, success)
+	} else {
+		r0 = ret.Error(0)
+	}
+	return r0
+}
+
+// mockICQService_MetaTerminalAck_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'MetaTerminalAck'
+type mockICQService_MetaTerminalAck_Call struct {
+	*mock.Call
+}
+
+// MetaTerminalAck is a helper method to define mock.On call
+//   - ctx context.Context
+//   - instance *state.SessionInstance
+//   - seq uint16
+//   - success uint8
+func (_e *mockICQService_Expecter) MetaTerminalAck(ctx interface{}, instance interface{}, seq interface{}, success interface{}) *mockICQService_MetaTerminalAck_Call {
+	return &mockICQService_MetaTerminalAck_Call{Call: _e.mock.On("MetaTerminalAck", ctx, instance, seq, success)}
+}
+
+func (_c *mockICQService_MetaTerminalAck_Call) Return(err error) *mockICQService_MetaTerminalAck_Call {
+	_c.Call.Return(err)
+	return _c
+}
+
+func (_c *mockICQService_MetaTerminalAck_Call) RunAndReturn(run func(ctx context.Context, instance *state.SessionInstance, seq uint16, success uint8) error) *mockICQService_MetaTerminalAck_Call {
 	_c.Call.Return(run)
 	return _c
 }

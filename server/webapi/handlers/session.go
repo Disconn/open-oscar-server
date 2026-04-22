@@ -231,7 +231,7 @@ func (h *SessionHandler) StartSession(w http.ResponseWriter, r *http.Request) {
 
 			// Broadcast buddy arrival to OSCAR clients
 			if h.BuddyBroadcaster != nil {
-				if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarInstance.IdentScreenName(), oscarInstance.Session().TLVUserInfo()); err != nil {
+				if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarInstance.IdentScreenName(), oscarInstance.Session().BuddyTLVUserInfo()); err != nil {
 					h.Logger.ErrorContext(ctx, "failed to broadcast buddy arrival", "err", err.Error())
 				}
 			}

@@ -408,7 +408,7 @@ func (h *PresenceHandler) SetState(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		// User visible - broadcast arrival/update
-		if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarSession.IdentScreenName(), oscarSession.Session().TLVUserInfo()); err != nil {
+		if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarSession.IdentScreenName(), oscarSession.Session().BuddyTLVUserInfo()); err != nil {
 			h.Logger.ErrorContext(ctx, "failed to broadcast buddy arrived", "err", err.Error())
 		}
 	}
@@ -465,7 +465,7 @@ func (h *PresenceHandler) SetStatus(w http.ResponseWriter, r *http.Request) {
 		// We'll need to extend this based on the actual implementation
 
 		// Broadcast presence update with new status
-		if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarSession.IdentScreenName(), oscarSession.Session().TLVUserInfo()); err != nil {
+		if err := h.BuddyBroadcaster.BroadcastBuddyArrived(ctx, oscarSession.IdentScreenName(), oscarSession.Session().BuddyTLVUserInfo()); err != nil {
 			h.Logger.ErrorContext(ctx, "failed to broadcast status update", "err", err.Error())
 		}
 	}

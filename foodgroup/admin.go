@@ -17,11 +17,12 @@ func NewAdminService(
 	relationshipFetcher RelationshipFetcher,
 	messageRelayer MessageRelayer,
 	sessionRetriever SessionRetriever,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 	logger *slog.Logger,
 ) *AdminService {
 	return &AdminService{
 		accountManager:   accountManager,
-		buddyBroadcaster: newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster: newBuddyNotifier(logger, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		messageRelayer:   messageRelayer,
 		logger:           logger,
 	}
@@ -71,7 +72,7 @@ func (s AdminService) ConfirmRequest(ctx context.Context, instance *state.Sessio
 		return wire.SNACMessage{}, err
 	}
 	instance.ClearUserInfoFlag(wire.OServiceUserFlagUnconfirmed)
-	if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+	if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 		return wire.SNACMessage{}, err
 	}
 	return getAdminConfirmReply(wire.AdminAcctConfirmStatusEmailSent), nil
@@ -210,7 +211,7 @@ func (s AdminService) InfoChangeRequest(ctx context.Context, instance *state.Ses
 			return wire.SNACMessage{}, err
 		}
 		instance.Session().SetDisplayScreenName(proposedName)
-		if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+		if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 			return wire.SNACMessage{}, err
 		}
 		s.messageRelayer.RelayToScreenName(ctx, instance.IdentScreenName(), wire.SNACMessage{

@@ -288,9 +288,10 @@ type sessionRegistryParams struct {
 }
 
 // addSessionParams is the list of parameters passed at the mock
-// SessionRegistry.AddSession call site
+// SessionRegistry.AddSessionWithIdent call site
 type addSessionParams []struct {
 	screenName  state.DisplayScreenName
+	addIdent    *state.IdentScreenName // optional; nil means screenName.IdentScreenName()
 	doMultiSess bool
 	result      *state.SessionInstance
 	err         error
@@ -820,6 +821,16 @@ func sessOptSignonComplete(instance *state.SessionInstance) {
 func sessOptUIN(UIN uint32) func(instance *state.SessionInstance) {
 	return func(instance *state.SessionInstance) {
 		instance.Session().SetUIN(UIN)
+	}
+}
+
+// sessOptICQDisplayNickname sets a custom visible name while keeping the
+// session keyed by a UIN-shaped ident (use with newTestInstance("100003", ...)).
+func sessOptICQDisplayNickname(display state.DisplayScreenName) func(instance *state.SessionInstance) {
+	return func(instance *state.SessionInstance) {
+		instance.Session().SetDisplayScreenName(display)
+		instance.Session().SetICQAccount(true)
+		instance.SetUserInfoFlag(wire.OServiceUserFlagICQ)
 	}
 }
 

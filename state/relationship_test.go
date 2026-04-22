@@ -2,10 +2,11 @@ package state
 
 import (
 	"context"
-	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/mk6i/open-oscar-server/wire"
 )
@@ -3134,12 +3135,10 @@ func TestSQLiteUserStore_AllRelationships(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				_ = os.Remove(testFile)
-			}()
-
-			feedbagStore, err := NewSQLiteUserStore(testFile)
+			dbPath := filepath.Join(t.TempDir(), "relationship.sqlite")
+			feedbagStore, err := NewSQLiteUserStore(dbPath)
 			assert.NoError(t, err)
+			t.Cleanup(func() { _ = feedbagStore.Close() })
 
 			for sn, list := range tt.clientSideLists {
 				assert.NoError(t, feedbagStore.SetPDMode(context.Background(), sn, list.privacyMode))
@@ -3187,4 +3186,57 @@ func TestSQLiteUserStore_AllRelationships(t *testing.T) {
 			assert.ElementsMatch(t, tt.expect, have)
 		})
 	}
+}
+
+// ICQ clients sometimes persist buddy keys with leading zeros. Those must still
+// join against canonical UINs in sessions and in the other party's feedbag rows.
+func TestSQLiteUserStore_AllRelationships_ICQUINLeadingZeros(t *testing.T) {
+	f := newTestSQLiteUserStore(t)
+	ctx := context.Background()
+	me := User{
+		IdentScreenName:   NewIdentScreenName("100000001"),
+		DisplayScreenName: "100000001",
+		IsICQ:             true,
+		AuthKey:           "a",
+		WeakMD5Pass:       []byte{1},
+		StrongMD5Pass:     []byte{2},
+	}
+	them := User{
+		IdentScreenName:   NewIdentScreenName("365199535"),
+		DisplayScreenName: "365199535",
+		IsICQ:             true,
+		AuthKey:           "b",
+		WeakMD5Pass:       []byte{1},
+		StrongMD5Pass:     []byte{2},
+	}
+	require.NoError(t, f.InsertUser(ctx, me))
+	require.NoError(t, f.InsertUser(ctx, them))
+	require.NoError(t, f.UseFeedbag(ctx, me.IdentScreenName))
+	require.NoError(t, f.UseFeedbag(ctx, them.IdentScreenName))
+
+	itemID := uint16(1)
+	itemsMe := []wire.FeedbagItem{
+		pdInfoItem(itemID, wire.FeedbagPDModePermitAll),
+		newFeedbagItem(wire.FeedbagClassIdBuddy, itemID+1, "365199535"),
+	}
+	itemsThem := []wire.FeedbagItem{
+		pdInfoItem(itemID, wire.FeedbagPDModePermitAll),
+		newFeedbagItem(wire.FeedbagClassIdBuddy, itemID+1, "100000001"),
+	}
+	require.NoError(t, f.FeedbagUpsert(ctx, me.IdentScreenName, itemsMe))
+	require.NoError(t, f.FeedbagUpsert(ctx, them.IdentScreenName, itemsThem))
+	require.NoError(t, f.RegisterBuddyList(ctx, me.IdentScreenName))
+	require.NoError(t, f.RegisterBuddyList(ctx, them.IdentScreenName))
+
+	_, err := f.db.ExecContext(ctx,
+		`UPDATE feedbag SET name = '0365199535' WHERE screenName = ? AND classID = ? AND name = '365199535'`,
+		me.IdentScreenName.String(), wire.FeedbagClassIdBuddy)
+	require.NoError(t, err)
+
+	rels, err := f.AllRelationships(ctx, me.IdentScreenName, nil)
+	require.NoError(t, err)
+	require.Len(t, rels, 1)
+	assert.True(t, rels[0].IsOnYourList)
+	assert.True(t, rels[0].IsOnTheirList)
+	assert.Equal(t, NewIdentScreenName("365199535").String(), rels[0].User.String())
 }

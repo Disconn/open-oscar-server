@@ -33,13 +33,30 @@ WITH myScreenName AS (SELECT ?),
                                     MAX(CASE WHEN feedbag.classId = 2 THEN 1 ELSE 0 END) AS isPermit,
                                     MAX(CASE WHEN feedbag.classId = 3 THEN 1 ELSE 0 END) AS isDeny
                              FROM feedbag
-                             WHERE feedbag.name = (SELECT * FROM myScreenName)
+                             WHERE (
+                                   feedbag.name = (SELECT * FROM myScreenName)
+                                   OR (
+                                       LENGTH(feedbag.name) > 0 AND LENGTH((SELECT * FROM myScreenName)) > 0
+                                       AND trim(feedbag.name, '0123456789') = ''
+                                       AND trim((SELECT * FROM myScreenName), '0123456789') = ''
+                                       AND CAST(feedbag.name AS INTEGER) = CAST((SELECT * FROM myScreenName) AS INTEGER)
+                                   )
+                               )
                              {{ if .DoFilter }}AND feedbag.screenName IN (SELECT * FROM filter){{ end }}
                                AND feedbag.classId IN (0, 2, 3)
-                               AND EXISTS(SELECT 1
-                                          FROM buddyListMode
-                                          WHERE buddyListMode.screenName = feedbag.screenName
-                                            AND useFeedbag IS TRUE)
+                               AND (
+                                    EXISTS(SELECT 1
+                                           FROM buddyListMode blm
+                                           WHERE blm.screenName = feedbag.screenName
+                                             AND blm.useFeedbag IS TRUE)
+                                    OR EXISTS(SELECT 1
+                                              FROM buddyListMode blm2
+                                              WHERE blm2.screenName = feedbag.screenName
+                                                AND COALESCE(blm2.useFeedbag, 0) = 0
+                                                AND EXISTS(SELECT 1 FROM feedbag fchk
+                                                           WHERE fchk.screenName = blm2.screenName
+                                                             AND fchk.classId = 0))
+                               )
                              GROUP BY feedbag.screenName) feedbag
                        FULL OUTER JOIN (SELECT me       AS _screenName,
                                                isBuddy  AS isBuddy,
@@ -55,7 +72,11 @@ WITH myScreenName AS (SELECT ?),
                               COALESCE(clientSide.isBuddy OR feedbag.isBuddy, FALSE) AS isBuddy,
                               COALESCE(clientSide.isPermit OR feedbag.isPermit, FALSE) AS isPermit,
                               COALESCE(clientSide.isDeny OR feedbag.isDeny, FALSE) AS isDeny
-                       FROM (SELECT feedbag.name                                         AS _screenName,
+                       FROM (SELECT CASE
+                                       WHEN LENGTH(feedbag.name) > 0 AND trim(feedbag.name, '0123456789') = ''
+                                       THEN CAST(CAST(feedbag.name AS INTEGER) AS TEXT)
+                                       ELSE feedbag.name
+                                       END AS _screenName,
                                     MAX(CASE WHEN feedbag.classId = 0 THEN 1 ELSE 0 END) AS isBuddy,
                                     MAX(CASE WHEN feedbag.classId = 2 THEN 1 ELSE 0 END) AS isPermit,
                                     MAX(CASE WHEN feedbag.classId = 3 THEN 1 ELSE 0 END) AS isDeny
@@ -63,11 +84,20 @@ WITH myScreenName AS (SELECT ?),
                              WHERE feedbag.screenName = (SELECT * FROM myScreenName)
                              {{ if .DoFilter }}AND feedbag.name IN (SELECT * FROM filter){{ end }}
                                AND feedbag.classId IN (0, 2, 3)
-                               AND EXISTS(SELECT 1
-                                          FROM buddyListMode
-                                          WHERE buddyListMode.screenName = feedbag.screenName
-                                            AND useFeedbag IS TRUE)
-                             GROUP BY feedbag.name) feedbag
+                               AND (
+                                    EXISTS(SELECT 1
+                                           FROM buddyListMode blm
+                                           WHERE blm.screenName = feedbag.screenName
+                                             AND blm.useFeedbag IS TRUE)
+                                    OR EXISTS(SELECT 1
+                                              FROM buddyListMode blm2
+                                              WHERE blm2.screenName = feedbag.screenName
+                                                AND COALESCE(blm2.useFeedbag, 0) = 0
+                                                AND EXISTS(SELECT 1 FROM feedbag fchk2
+                                                           WHERE fchk2.screenName = blm2.screenName
+                                                             AND fchk2.classId = 0))
+                               )
+                             GROUP BY 1) feedbag
                        FULL OUTER JOIN (SELECT them     AS _screenName,
                                                isBuddy  AS isBuddy,
                                                isPermit AS isPermit,
@@ -115,11 +145,11 @@ SELECT COALESCE(yourBuddyList._screenName, theirBuddyLists._screenName) AS scree
            ELSE false
            END                                                        AS youBlock,
        CASE
-           WHEN theirPrivacyPrefs.pdMode = 1 THEN false
-           WHEN theirPrivacyPrefs.pdMode = 2 THEN true
-           WHEN theirPrivacyPrefs.pdMode = 3 THEN IFNULL(theirBuddyLists.isPermit, false) = false
-           WHEN theirPrivacyPrefs.pdMode = 4 THEN IFNULL(theirBuddyLists.isDeny, false)
-           WHEN theirPrivacyPrefs.pdMode = 5 THEN IFNULL(theirBuddyLists.isBuddy, false) = false
+           WHEN COALESCE(theirPrivacyPrefs.pdMode, 1) = 1 THEN false
+           WHEN COALESCE(theirPrivacyPrefs.pdMode, 1) = 2 THEN true
+           WHEN COALESCE(theirPrivacyPrefs.pdMode, 1) = 3 THEN IFNULL(theirBuddyLists.isPermit, false) = false
+           WHEN COALESCE(theirPrivacyPrefs.pdMode, 1) = 4 THEN IFNULL(theirBuddyLists.isDeny, false)
+           WHEN COALESCE(theirPrivacyPrefs.pdMode, 1) = 5 THEN IFNULL(theirBuddyLists.isBuddy, false) = false
            ELSE false
            END                                                        AS blocksYou,
        IFNULL(theirBuddyLists.isBuddy, false)                         AS onTheirBuddyList,
@@ -127,7 +157,7 @@ SELECT COALESCE(yourBuddyList._screenName, theirBuddyLists._screenName) AS scree
 FROM theirBuddyLists
          FULL OUTER JOIN yourBuddyList
               ON (yourBuddyList._screenName = theirBuddyLists._screenName)
-         JOIN theirPrivacyPrefs
+         LEFT JOIN theirPrivacyPrefs
               ON (theirPrivacyPrefs.screenName = COALESCE(theirBuddyLists._screenName, yourBuddyList._screenName))
          JOIN yourPrivacyPrefs ON (1 = 1)
 `
@@ -192,10 +222,13 @@ func (f SQLiteUserStore) Relationship(ctx context.Context, me IdentScreenName, t
 // A relationship is defined by the [Relationship] type, which describes the nature
 // of the connection between users.
 //
-// This function only includes users who have activated their buddy list through
-// a call to [SQLiteUserStore.RegisterBuddyList]. The results can be optionally
-// filtered to include only specific users by providing their identifiers in
-// the `filter` parameter.
+// `me` must have called [SQLiteUserStore.RegisterBuddyList] (BOS sign-on does
+// this) so `yourPrivacyPrefs` exists. Counterparties may be offline, in which
+// case they have no buddyListMode row; their permit/deny side defaults to
+// permit-all (blocksYou false) so buddy-list rows are not dropped and presence
+// can resolve once they reconnect.
+//
+// The results can optionally be filtered to specific users via `filter`.
 func (f SQLiteUserStore) AllRelationships(ctx context.Context, me IdentScreenName, filter []IdentScreenName) ([]Relationship, error) {
 	tpl := queryWithoutFiltering
 	args := make([]any, 1, len(filter)+1)

@@ -82,6 +82,13 @@ type AccountManager interface {
 	User(ctx context.Context, screenName state.IdentScreenName) (*state.User, error)
 }
 
+// BuddyFeedbagUserLookup resolves a feedbag buddy key to the account record.
+// Keys may match identScreenName or a normalized display nickname (ICQ), so
+// online sessions keyed only by UIN can still be found for buddy SNACs.
+type BuddyFeedbagUserLookup interface {
+	UserForFeedbagBuddyKey(ctx context.Context, key state.IdentScreenName) (*state.User, error)
+}
+
 // buddyBroadcaster defines methods for broadcasting buddy presence and visibility events
 // to other sessions. These events notify users when a buddy comes online, goes offline,
 // or changes visibility status.
@@ -365,6 +372,10 @@ type SessionRegistry interface {
 	// the others will return an error once the context is done.
 	// If doMultiSess is true, allows multiple sessions for the same screen name.
 	AddSession(ctx context.Context, screenName state.DisplayScreenName, doMultiSess bool, cfg ...func(sess *state.Session)) (*state.SessionInstance, error)
+
+	// AddSessionWithIdent is like AddSession but locks and indexes the session by
+	// ident (canonical account key). Display may differ, e.g. ICQ nickname vs UIN string.
+	AddSessionWithIdent(ctx context.Context, display state.DisplayScreenName, ident state.IdentScreenName, doMultiSess bool, cfg ...func(sess *state.Session)) (*state.SessionInstance, error)
 
 	// RemoveSession removes the given session from the registry, allowing future sessions
 	// to be created for the same screen name.

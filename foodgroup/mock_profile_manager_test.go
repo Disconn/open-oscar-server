@@ -625,3 +625,42 @@ func (_c *mockProfileManager_User_Call) RunAndReturn(run func(ctx context.Contex
 	_c.Call.Return(run)
 	return _c
 }
+
+// FindByUIN provides a mock function for UserLookupService uin resolution (not part of ProfileManager).
+func (_mock *mockProfileManager) FindByUIN(ctx context.Context, UIN uint32) (state.User, error) {
+	ret := _mock.Called(ctx, UIN)
+
+	if len(ret) == 0 {
+		panic("no return value specified for FindByUIN")
+	}
+
+	var r0 state.User
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint32) (state.User, error)); ok {
+		return returnFunc(ctx, UIN)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, uint32) state.User); ok {
+		r0 = returnFunc(ctx, UIN)
+	} else {
+		r0 = ret.Get(0).(state.User)
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, uint32) error); ok {
+		r1 = returnFunc(ctx, UIN)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+type mockProfileManager_FindByUIN_Call struct {
+	*mock.Call
+}
+
+func (_e *mockProfileManager_Expecter) FindByUIN(ctx interface{}, UIN interface{}) *mockProfileManager_FindByUIN_Call {
+	return &mockProfileManager_FindByUIN_Call{Call: _e.mock.On("FindByUIN", ctx, UIN)}
+}
+
+func (_c *mockProfileManager_FindByUIN_Call) Return(user state.User, err error) *mockProfileManager_FindByUIN_Call {
+	_c.Call.Return(user, err)
+	return _c
+}

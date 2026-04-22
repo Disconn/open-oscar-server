@@ -340,7 +340,7 @@ func TestBARTService_UpsertItem(t *testing.T) {
 							params.message.Body.(func(any) bool)(message.Body)
 					}))
 			}
-			svc := NewBARTService(slog.Default(), bartItemManager, messageRelayer, nil, nil)
+			svc := NewBARTService(slog.Default(), bartItemManager, messageRelayer, nil, nil, nil)
 			svc.buddyUpdateBroadcaster = buddyUpdateBroadcaster
 
 			output, err := svc.UpsertItem(context.Background(), tc.instance, tc.inputSNAC.Frame,
@@ -502,7 +502,7 @@ func TestBARTService_RetrieveItem(t *testing.T) {
 					Return(params.result, params.err)
 			}
 
-			svc := NewBARTService(slog.Default(), bartItemManager, nil, nil, nil)
+			svc := NewBARTService(slog.Default(), bartItemManager, nil, nil, nil, nil)
 
 			output, err := svc.RetrieveItem(context.Background(), tc.inputSNAC.Frame, tc.inputSNAC.Body.(wire.SNAC_0x10_0x04_BARTDownloadQuery))
 
@@ -876,7 +876,7 @@ func TestBARTService_RetrieveItemV2(t *testing.T) {
 					Return(params.result, params.err)
 			}
 
-			svc := NewBARTService(slog.Default(), bartItemManager, nil, nil, nil)
+			svc := NewBARTService(slog.Default(), bartItemManager, nil, nil, nil, nil)
 
 			output, err := svc.RetrieveItemV2(context.Background(), tc.inputSNAC.Frame, tc.inputSNAC.Body.(wire.SNAC_0x10_0x06_BARTDownload2Query))
 

@@ -14,9 +14,10 @@ func NewPermitDenyService(
 	clientSideBuddyListManager ClientSideBuddyListManager,
 	messageRelayer MessageRelayer,
 	sessionRetriever SessionRetriever,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 ) PermitDenyService {
 	return PermitDenyService{
-		buddyBroadcaster:           newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster:           newBuddyNotifier(nil, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		clientSideBuddyListManager: clientSideBuddyListManager,
 	}
 }

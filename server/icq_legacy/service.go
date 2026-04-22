@@ -736,6 +736,23 @@ func (s *ICQLegacyService) sendToOSCARClient(ctx context.Context, from, to state
 					Accepted:   1,
 				},
 			})
+			s.messageRelayer.RelayToScreenName(ctx, from, wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Feedbag,
+					SubGroup:  wire.FeedbagBuddyAdded,
+					RequestID: wire.ReqIDFromServer,
+				},
+				Body: wire.SNAC_0x13_0x1C_FeedbagBuddyAddedBody{
+					InnerLen: 6,
+					A:        1,
+					B:        2,
+					C:        2,
+					UIN:      to.String(),
+				},
+			})
+			if err := s.syncBuddyRowsAndPresenceAfterAuthGrant(ctx, from, to); err != nil {
+				s.logger.WarnContext(ctx, "sync buddy rows after legacy auth grant", "err", err.Error())
+			}
 		}
 		return nil
 
@@ -1463,7 +1480,7 @@ func (s *ICQLegacyService) ProcessStatusChange(ctx context.Context, req StatusCh
 					s.logger.Debug("ProcessStatusChange: failed to broadcast departure", "err", err)
 				}
 			} else {
-				if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, screenName, session.Instance.Session().TLVUserInfo()); err != nil {
+				if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, screenName, session.Instance.Session().BuddyTLVUserInfo()); err != nil {
 					s.logger.Debug("ProcessStatusChange: failed to broadcast to OSCAR clients", "err", err)
 				}
 			}
@@ -1505,7 +1522,7 @@ func (s *ICQLegacyService) NotifyStatusChange(ctx context.Context, uin uint32, s
 				return nil
 			}
 
-			userInfo := session.Instance.Session().TLVUserInfo()
+			userInfo := session.Instance.Session().BuddyTLVUserInfo()
 			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, screenName, userInfo); err != nil {
 				s.logger.Debug("NotifyStatusChange: failed to broadcast arrival", "err", err)
 			}
@@ -1574,11 +1591,11 @@ func (s *ICQLegacyService) NotifyUserOnline(ctx context.Context, uin uint32, sta
 				return nil
 			}
 
-			// Use the session's TLVUserInfo — same as OSCAR's SetUserInfoFields
-			userInfo := session.Instance.Session().TLVUserInfo()
-
-			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, screenName, userInfo); err != nil {
-				s.logger.Debug("NotifyUserOnline: failed to broadcast arrival", "uin", uin, "err", err)
+			// Match OServiceClientOnline (BOS): full visibility pass so OSCAR/ICQ6
+			// clients get BuddyArrived for this user and this session receives
+			// BuddyArrived for online contacts already on their list.
+			if err := s.buddyBroadcaster.BroadcastVisibility(ctx, session.Instance, nil, false); err != nil {
+				s.logger.Debug("NotifyUserOnline: BroadcastVisibility failed", "uin", uin, "err", err)
 			}
 		}
 	}
@@ -2155,6 +2172,36 @@ func mapOSCARStatusToLegacy(oscarStatus uint32) uint32 {
 	}
 
 	return legacyStatus
+}
+
+// syncBuddyRowsAndPresenceAfterAuthGrant mirrors server-side buddy rows so
+// relationship queries report IsOnTheirList and OSCAR buddy presence can flow.
+func (s *ICQLegacyService) syncBuddyRowsAndPresenceAfterAuthGrant(ctx context.Context, granter, requester state.IdentScreenName) error {
+	if err := s.clientSideBuddyListManager.AddBuddy(ctx, granter, requester); err != nil {
+		return fmt.Errorf("AddBuddy granter→requester: %w", err)
+	}
+	if err := s.clientSideBuddyListManager.AddBuddy(ctx, requester, granter); err != nil {
+		return fmt.Errorf("AddBuddy requester→granter: %w", err)
+	}
+	gTLV := s.tlvUserInfoForScreenName(granter)
+	rTLV := s.tlvUserInfoForScreenName(requester)
+	_ = s.buddyBroadcaster.BroadcastBuddyArrived(ctx, granter, gTLV)
+	_ = s.buddyBroadcaster.BroadcastBuddyArrived(ctx, requester, rTLV)
+	return nil
+}
+
+func (s *ICQLegacyService) tlvUserInfoForScreenName(sn state.IdentScreenName) wire.TLVUserInfo {
+	if sess := s.sessionRetriever.RetrieveSession(sn); sess != nil {
+		return sess.BuddyTLVUserInfo()
+	}
+	if s.legacySessionManager != nil {
+		if uin, err := strconv.ParseUint(sn.String(), 10, 32); err == nil {
+			if leg := s.legacySessionManager.GetSession(uint32(uin)); leg != nil && leg.Instance != nil {
+				return leg.Instance.Session().BuddyTLVUserInfo()
+			}
+		}
+	}
+	return wire.TLVUserInfo{ScreenName: sn.String()}
 }
 
 // generateMessageCookie generates a unique message cookie for ICBM messages

@@ -78,7 +78,65 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 						sessOptCannedSignonTime,
 						sessOptCannedAwayMessage,
 						sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).
-						Session().TLVUserInfo(),
+						Session().BuddyTLVUserInfo(),
+					LocateInfo: wire.TLVRestBlock{},
+				},
+			},
+		},
+		{
+			name: "ICQ Locate: leading-zero UIN in query resolves session keyed by canonical UIN",
+			mockParams: mockParams{
+				relationshipFetcherParams: relationshipFetcherParams{
+					relationshipParams: relationshipParams{
+						{
+							me:   state.NewIdentScreenName("user_screen_name"),
+							them: state.NewIdentScreenName("365199535"),
+							result: state.Relationship{
+								User:          state.NewIdentScreenName("365199535"),
+								BlocksYou:     false,
+								YouBlock:      false,
+								IsOnYourList:  true,
+								IsOnTheirList: true,
+							},
+						},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams: retrieveSessionParams{
+						{
+							screenName: state.NewIdentScreenName("365199535"),
+							result: newTestInstance("365199535",
+								sessOptUIN(365199535),
+								sessOptCannedSignonTime,
+								sessOptCannedAwayMessage,
+								sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).Session(),
+						},
+					},
+				},
+			},
+			instance: newTestInstance("user_screen_name"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x02_0x05_LocateUserInfoQuery{
+					Type:       0,
+					ScreenName: "0365199535",
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Locate,
+					SubGroup:  wire.LocateUserInfoReply,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x02_0x06_LocateUserInfoReply{
+					TLVUserInfo: newTestInstance("365199535",
+						sessOptUIN(365199535),
+						sessOptCannedSignonTime,
+						sessOptCannedAwayMessage,
+						sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).
+						Session().BuddyTLVUserInfo(),
 					LocateInfo: wire.TLVRestBlock{},
 				},
 			},
@@ -139,7 +197,7 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 					TLVUserInfo: newTestInstance("requested-user",
 						sessOptCannedSignonTime,
 						sessOptCannedAwayMessage,
-						sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).Session().TLVUserInfo(),
+						sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).Session().BuddyTLVUserInfo(),
 					LocateInfo: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
 							wire.NewTLVBE(wire.LocateTLVTagsInfoSigMime, `text/aolrtf; charset="us-ascii"`),
@@ -201,7 +259,7 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 						sessOptCannedSignonTime,
 						sessOptCannedAwayMessage,
 						sessOptUserInfoFlag(wire.OServiceUserFlagUnavailable)).
-						Session().TLVUserInfo(),
+						Session().BuddyTLVUserInfo(),
 					LocateInfo: wire.TLVRestBlock{
 						TLVList: wire.TLVList{
 							wire.NewTLVBE(wire.LocateTLVTagsInfoUnavailableMime, `text/aolrtf; charset="us-ascii"`),
@@ -251,6 +309,72 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 			},
 		},
 		{
+			name: "offline user: account in store, return LocateUserInfoReply with offline TLVUserInfo",
+			mockParams: mockParams{
+				relationshipFetcherParams: relationshipFetcherParams{
+					relationshipParams: relationshipParams{
+						{
+							me:   state.NewIdentScreenName("user_screen_name"),
+							them: state.NewIdentScreenName("requested-user"),
+							result: state.Relationship{
+								User:          state.NewIdentScreenName("requested-user"),
+								BlocksYou:     false,
+								YouBlock:      false,
+								IsOnYourList:  true,
+								IsOnTheirList: true,
+							},
+						},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams: retrieveSessionParams{
+						{
+							screenName: state.NewIdentScreenName("requested-user"),
+							result:     nil,
+						},
+					},
+				},
+				userManagerParams: userManagerParams{
+					getUserParams: getUserParams{
+						{
+							screenName: state.NewIdentScreenName("requested-user"),
+							result: &state.User{
+								IdentScreenName:   state.NewIdentScreenName("requested-user"),
+								DisplayScreenName: state.DisplayScreenName("requested-user"),
+								IsICQ:             true,
+							},
+							err: nil,
+						},
+					},
+				},
+			},
+			instance: newTestInstance("user_screen_name"),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x02_0x05_LocateUserInfoQuery{
+					Type:       0,
+					ScreenName: "requested-user",
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.Locate,
+					SubGroup:  wire.LocateUserInfoReply,
+					RequestID: 1234,
+				},
+				Body: wire.SNAC_0x02_0x06_LocateUserInfoReply{
+					TLVUserInfo: locateOfflineTLVUserInfo(&state.User{
+						IdentScreenName:   state.NewIdentScreenName("requested-user"),
+						DisplayScreenName: state.DisplayScreenName("requested-user"),
+						IsICQ:             true,
+					}),
+					LocateInfo: wire.TLVRestBlock{},
+				},
+			},
+		},
+		{
 			name: "request user info of user who does not exist, expect not logged in error",
 			mockParams: mockParams{
 				relationshipFetcherParams: relationshipFetcherParams{
@@ -273,6 +397,15 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 						{
 							screenName: state.NewIdentScreenName("non_existent_requested_user"),
 							result:     nil,
+						},
+					},
+				},
+				userManagerParams: userManagerParams{
+					getUserParams: getUserParams{
+						{
+							screenName: state.NewIdentScreenName("non_existent_requested_user"),
+							result:     nil,
+							err:        nil,
 						},
 					},
 				},
@@ -314,10 +447,21 @@ func TestLocateService_UserInfoQuery(t *testing.T) {
 					Return(val.result)
 			}
 			messageRelayer := newMockMessageRelayer(t)
+			var userManager UserManager
+			if len(tc.mockParams.userManagerParams.getUserParams) > 0 {
+				um := newMockUserManager(t)
+				for _, params := range tc.mockParams.userManagerParams.getUserParams {
+					um.EXPECT().
+						User(matchContext(), params.screenName).
+						Return(params.result, params.err)
+				}
+				userManager = um
+			}
 			svc := LocateService{
 				relationshipFetcher: relationshipFetcher,
 				messageRelayer:      messageRelayer,
 				sessionRetriever:    sessionRetriever,
+				userManager:         userManager,
 			}
 			outputSNAC, err := svc.UserInfoQuery(context.Background(), tc.instance, tc.inputSNAC.Frame,
 				tc.inputSNAC.Body.(wire.SNAC_0x02_0x05_LocateUserInfoQuery))
@@ -496,7 +640,7 @@ func TestLocateService_SetKeywordInfo(t *testing.T) {
 					Return(params.err)
 			}
 			messageRelayer := newMockMessageRelayer(t)
-			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil)
+			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil, nil)
 			outputSNAC, err := svc.SetKeywordInfo(context.Background(), tt.instance, tt.inputSNAC.Frame, tt.inputSNAC.Body.(wire.SNAC_0x02_0x0F_LocateSetKeywordInfo))
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectOutput, outputSNAC)
@@ -586,7 +730,7 @@ func TestLocateService_SetDirInfo(t *testing.T) {
 					Return(nil)
 			}
 			messageRelayer := newMockMessageRelayer(t)
-			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil)
+			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil, nil)
 			outputSNAC, err := svc.SetDirInfo(context.Background(), tt.instance, tt.inputSNAC.Frame, tt.inputSNAC.Body.(wire.SNAC_0x02_0x09_LocateSetDirInfo))
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectOutput, outputSNAC)
@@ -792,7 +936,7 @@ func TestLocateService_SetInfo(t *testing.T) {
 					t.Fail()
 				}
 			}
-			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil)
+			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil, nil)
 			svc.buddyBroadcaster = buddyUpdateBroadcaster
 
 			err := svc.SetInfo(context.Background(), tt.instance, tt.inBody)
@@ -805,7 +949,7 @@ func TestLocateService_SetInfo(t *testing.T) {
 
 func TestLocateService_SetInfo_SetCaps(t *testing.T) {
 	messageRelayer := newMockMessageRelayer(t)
-	svc := NewLocateService(nil, messageRelayer, nil, nil, nil, nil)
+	svc := NewLocateService(nil, messageRelayer, nil, nil, nil, nil, nil)
 
 	instance := newTestInstance("screen-name")
 	inBody := wire.SNAC_0x02_0x04_LocateSetInfo{
@@ -837,9 +981,33 @@ func TestLocateService_SetInfo_SetCaps(t *testing.T) {
 	assert.ElementsMatch(t, expect, instance.Session().Caps())
 }
 
+func TestLocateService_SetInfo_ShortCapabilities_ICQ5(t *testing.T) {
+	messageRelayer := newMockMessageRelayer(t)
+	svc := NewLocateService(nil, messageRelayer, nil, nil, nil, nil, nil)
+
+	instance := newTestInstance("1000003")
+	instance.SetUserInfoFlag(wire.OServiceUserFlagICQ)
+	// Sign-on not complete: we only assert caps decode/store (no buddy broadcast).
+
+	// Two short caps (uint16 BE), as older ICQ clients send — not a multiple of 16.
+	inBody := wire.SNAC_0x02_0x04_LocateSetInfo{
+		TLVRestBlock: wire.TLVRestBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVBE(wire.LocateTLVTagsInfoCapabilities, []byte{0x13, 0x4d, 0x13, 0x4e}),
+			},
+		},
+	}
+	assert.NoError(t, svc.SetInfo(context.Background(), instance, inBody))
+
+	got := instance.Session().Caps()
+	// Short caps decode to SupportICQ + UTF8; omitCaps strips CapSupportICQ like full UUID caps.
+	assert.Len(t, got, 1)
+	assert.Contains(t, got, [16]byte(wire.CapUTF8Messages))
+}
+
 func TestLocateService_RightsQuery(t *testing.T) {
 	messageRelayer := newMockMessageRelayer(t)
-	svc := NewLocateService(nil, messageRelayer, nil, nil, nil, nil)
+	svc := NewLocateService(nil, messageRelayer, nil, nil, nil, nil, nil)
 
 	outputSNAC := svc.RightsQuery(context.Background(), wire.SNACFrame{RequestID: 1234})
 	expectSNAC := wire.SNACMessage{
@@ -984,7 +1152,7 @@ func TestLocateService_DirInfo(t *testing.T) {
 					Return(params.result, params.err)
 			}
 			messageRelayer := newMockMessageRelayer(t)
-			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil)
+			svc := NewLocateService(nil, messageRelayer, profileManager, nil, nil, nil, nil)
 			outputSNAC, err := svc.DirInfo(context.Background(), tt.inputSNAC.Frame, tt.inputSNAC.Body.(wire.SNAC_0x02_0x0B_LocateGetDirInfo))
 			assert.NoError(t, err)
 			assert.Equal(t, tt.expectOutput, outputSNAC)

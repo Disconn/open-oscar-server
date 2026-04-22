@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 	"net/mail"
-	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -18,17 +18,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testFile string = "aim_test.db"
+// newTestSQLiteUserStore opens an isolated SQLite DB per test (avoids Windows
+// file locking and cross-test pollution from a shared aim_test.db).
+func newTestSQLiteUserStore(t *testing.T) *SQLiteUserStore {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "oscar_test.sqlite")
+	f, err := NewSQLiteUserStore(dbPath)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+	return f
+}
 
 func TestSQLiteUserStore_FeedbagUpsert(t *testing.T) {
 	t.Run("buddy screen name is converted to ident screen name", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		given := []wire.FeedbagItem{
 			{
 				GroupID:   0,
@@ -71,13 +75,8 @@ func TestSQLiteUserStore_FeedbagUpsert(t *testing.T) {
 	})
 
 	t.Run("upsert PD info with mode", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		given := []wire.FeedbagItem{
 			{
 				GroupID: 0x0A,
@@ -102,13 +101,8 @@ func TestSQLiteUserStore_FeedbagUpsert(t *testing.T) {
 	})
 
 	t.Run("upsert PD info without mode (QIP behavior)", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		given := []wire.FeedbagItem{
 			{
 				GroupID:   0x0A,
@@ -134,13 +128,8 @@ func TestFeedbagDelete(t *testing.T) {
 	t.Run("happy path", func(t *testing.T) {
 		screenName := NewIdentScreenName("sn2day")
 
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		itemsIn := []wire.FeedbagItem{
 			{
 				GroupID: 0,
@@ -188,13 +177,8 @@ func TestFeedbagDelete(t *testing.T) {
 	t.Run("delete group", func(t *testing.T) {
 		screenName := NewIdentScreenName("sn2day")
 
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		itemsIn := []wire.FeedbagItem{
 			{
 				GroupID: 0x0A,
@@ -246,13 +230,8 @@ func TestLastModifiedEmpty(t *testing.T) {
 
 	screenName := NewIdentScreenName("sn2day")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	_, err = f.FeedbagLastModified(context.Background(), screenName)
 
 	if err != nil {
@@ -264,13 +243,8 @@ func TestLastModifiedNotEmpty(t *testing.T) {
 
 	screenName := NewIdentScreenName("sn2day")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	itemsIn := []wire.FeedbagItem{
 		{
 			GroupID: 0x0A,
@@ -294,13 +268,8 @@ func TestProfile(t *testing.T) {
 
 	screenName := NewIdentScreenName("sn2day")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	u := User{
 		IdentScreenName: screenName,
 	}
@@ -370,13 +339,8 @@ func TestProfileNonExistent(t *testing.T) {
 
 	screenName := NewIdentScreenName("sn2day")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	prof, err := f.Profile(context.Background(), screenName)
 	assert.NoError(t, err)
 	assert.True(t, prof.IsZero())
@@ -387,13 +351,7 @@ func TestProfileNonExistent(t *testing.T) {
 func TestProfile_MimeTypeAndUpdateTime(t *testing.T) {
 	screenName := NewIdentScreenName("testuser")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	require.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
 	u := User{
 		IdentScreenName: screenName,
 	}
@@ -448,13 +406,8 @@ func TestProfile_MimeTypeAndUpdateTime(t *testing.T) {
 }
 
 func TestGetUser(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("testscreenname")
 
 	insertedUser := &User{
@@ -464,7 +417,9 @@ func TestGetUser(t *testing.T) {
 		StrongMD5Pass:     []byte("thepasshash"),
 		RegStatus:         3,
 		LastWarnUpdate:    time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC), // Database default value
-		ICQPermissions:    ICQPermissions{AuthRequired: true},
+		// InsertUser does not copy arbitrary ICQPermissions from the struct; it
+		// forces icq_permissions_authRequired=false so buddy adds work by default.
+		ICQPermissions: ICQPermissions{AuthRequired: false},
 	}
 	err = f.InsertUser(context.Background(), *insertedUser)
 	assert.NoError(t, err)
@@ -480,13 +435,8 @@ func TestGetUser(t *testing.T) {
 }
 
 func TestSQLiteUserStore_User_OfflineMsgCount(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("testuser")
 
 	// Insert user first
@@ -508,13 +458,8 @@ func TestSQLiteUserStore_User_OfflineMsgCount(t *testing.T) {
 }
 
 func TestGetUserNotFound(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	actualUser, err := f.User(context.Background(), NewIdentScreenName("testscreenname"))
 	if err != nil {
 		t.Fatalf("failed to get user: %s", err.Error())
@@ -526,13 +471,8 @@ func TestGetUserNotFound(t *testing.T) {
 }
 
 func TestSQLiteUserStore_Users(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	want := []User{
 		{
 			IdentScreenName:   NewIdentScreenName("userA"),
@@ -566,13 +506,8 @@ func TestSQLiteUserStore_Users(t *testing.T) {
 }
 
 func TestSQLiteUserStore_InsertUser_UINButNotIsICQ(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	user := User{
 		IdentScreenName:   NewIdentScreenName("100003"),
 		DisplayScreenName: "100003",
@@ -582,14 +517,51 @@ func TestSQLiteUserStore_InsertUser_UINButNotIsICQ(t *testing.T) {
 	assert.ErrorContains(t, err, "inserting user with UIN and isICQ=false")
 }
 
+func TestSQLiteUserStore_UserForFeedbagBuddyKey(t *testing.T) {
+	f := newTestSQLiteUserStore(t)
+	ctx := context.Background()
+	u := User{
+		IdentScreenName:   NewIdentScreenName("100005"),
+		DisplayScreenName: DisplayScreenName("Bee Two"),
+		IsICQ:             true,
+		AuthKey:           "salt",
+		WeakMD5Pass:       []byte{1},
+		StrongMD5Pass:     []byte{2},
+	}
+	require.NoError(t, f.InsertUser(ctx, u))
+	u365 := User{
+		IdentScreenName:   NewIdentScreenName("365199535"),
+		DisplayScreenName: "365199535",
+		IsICQ:             true,
+		AuthKey:           "salt2",
+		WeakMD5Pass:       []byte{3},
+		StrongMD5Pass:     []byte{4},
+	}
+	require.NoError(t, f.InsertUser(ctx, u365))
+
+	got, err := f.UserForFeedbagBuddyKey(ctx, NewIdentScreenName("100005"))
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "100005", got.IdentScreenName.String())
+
+	got2, err := f.UserForFeedbagBuddyKey(ctx, NewIdentScreenName("beetwo"))
+	require.NoError(t, err)
+	require.NotNil(t, got2)
+	assert.Equal(t, "100005", got2.IdentScreenName.String())
+
+	got3, err := f.UserForFeedbagBuddyKey(ctx, NewIdentScreenName("nosuchuser"))
+	require.NoError(t, err)
+	assert.Nil(t, got3)
+
+	got4, err := f.UserForFeedbagBuddyKey(ctx, NewIdentScreenName("0365199535"))
+	require.NoError(t, err)
+	require.NotNil(t, got4)
+	assert.Equal(t, "365199535", got4.IdentScreenName.String())
+}
+
 func TestSQLiteUserStore_DeleteUser_DeleteExistentUser(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	err = f.InsertUser(context.Background(), User{
 		IdentScreenName:   NewIdentScreenName("userA"),
 		DisplayScreenName: "userA",
@@ -615,13 +587,8 @@ func TestSQLiteUserStore_DeleteUser_DeleteExistentUser(t *testing.T) {
 }
 
 func TestSQLiteUserStore_DeleteUser_DeleteNonExistentUser(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	err = f.DeleteUser(context.Background(), NewIdentScreenName("userA"))
 	assert.ErrorIs(t, ErrNoUser, err)
 }
@@ -651,13 +618,8 @@ func TestSQLiteUserStore_SetBuddyIconAndRetrieve(t *testing.T) {
 	item := []byte{'a', 'b', 'c', 'd'}
 
 	t.Run("insert_and_retrieve", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		feedbagStore, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		feedbagStore := newTestSQLiteUserStore(t)
+		var err error
 		b, err := feedbagStore.BARTItem(context.Background(), hash)
 		assert.NoError(t, err)
 		assert.Empty(t, b)
@@ -671,13 +633,8 @@ func TestSQLiteUserStore_SetBuddyIconAndRetrieve(t *testing.T) {
 	})
 
 	t.Run("duplicate_insert_returns_error", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		feedbagStore, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		feedbagStore := newTestSQLiteUserStore(t)
+		var err error
 		// First insert the item
 		err = feedbagStore.InsertBARTItem(context.Background(), hash, item, 1)
 		assert.NoError(t, err)
@@ -691,26 +648,16 @@ func TestSQLiteUserStore_SetBuddyIconAndRetrieve(t *testing.T) {
 
 func TestSQLiteUserStore_ListBARTItems(t *testing.T) {
 	t.Run("empty_list", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		feedbagStore, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		feedbagStore := newTestSQLiteUserStore(t)
+		var err error
 		items, err := feedbagStore.ListBARTItems(context.Background(), 1)
 		assert.NoError(t, err)
 		assert.Empty(t, items)
 	})
 
 	t.Run("list_with_items", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		feedbagStore, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		feedbagStore := newTestSQLiteUserStore(t)
+		var err error
 		// Insert some test items of type 1
 		hash1 := []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 		item1 := []byte{'a', 'b', 'c', 'd'}
@@ -736,13 +683,8 @@ func TestSQLiteUserStore_ListBARTItems(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SetUserPassword_UserExists(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	feedbagStore, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	feedbagStore := newTestSQLiteUserStore(t)
+	var err error
 	u := User{
 		IdentScreenName:   NewIdentScreenName("theuser"),
 		DisplayScreenName: "theUser",
@@ -767,13 +709,8 @@ func TestSQLiteUserStore_SetUserPassword_UserExists(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SetUserPassword_ErrNoUser(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	feedbagStore, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	feedbagStore := newTestSQLiteUserStore(t)
+	var err error
 	err = feedbagStore.SetUserPassword(context.Background(), NewIdentScreenName("some_user"), "thepassword")
 	assert.ErrorIs(t, err, ErrNoUser)
 }
@@ -807,13 +744,8 @@ func TestSQLiteUserStore_ChatRoomByCookie(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				assert.NoError(t, os.Remove(testFile))
-			}()
-
-			userStore, err := NewSQLiteUserStore(testFile)
-			assert.NoError(t, err)
-
+			userStore := newTestSQLiteUserStore(t)
+			var err error
 			err = userStore.CreateChatRoom(context.Background(), &tt.givenRoom)
 			assert.NoError(t, err)
 
@@ -855,13 +787,8 @@ func TestSQLiteUserStore_ChatRoomByName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			defer func() {
-				assert.NoError(t, os.Remove(testFile))
-			}()
-
-			userStore, err := NewSQLiteUserStore(testFile)
-			assert.NoError(t, err)
-
+			userStore := newTestSQLiteUserStore(t)
+			var err error
 			err = userStore.CreateChatRoom(context.Background(), &tt.givenRoom)
 			assert.NoError(t, err)
 
@@ -875,13 +802,8 @@ func TestSQLiteUserStore_ChatRoomByName(t *testing.T) {
 }
 
 func TestSQLiteUserStore_AllChatRooms(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	userStore, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	userStore := newTestSQLiteUserStore(t)
+	var err error
 	chatRooms := []ChatRoom{
 		NewChatRoom("chat room 1", NewIdentScreenName("creator"), PrivateExchange),
 		NewChatRoom("chat room 2", NewIdentScreenName("creator"), PrivateExchange),
@@ -932,13 +854,8 @@ func TestSQLiteUserStore_CreateChatRoom_ErrChatRoomExists(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			defer func() {
-				assert.NoError(t, os.Remove(testFile))
-			}()
-
-			userStore, err := NewSQLiteUserStore(testFile)
-			assert.NoError(t, err)
-
+			userStore := newTestSQLiteUserStore(t)
+			var err error
 			err = userStore.CreateChatRoom(context.Background(), &tc.firstInsert)
 			assert.NoError(t, err)
 
@@ -953,13 +870,8 @@ func TestUpdateDisplayScreenName(t *testing.T) {
 	screenNameOriginal := DisplayScreenName("chattingchuck")
 	screenNameFormatted := DisplayScreenName("Chatting Chuck")
 
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	user := User{
 		DisplayScreenName: screenNameOriginal,
 		IdentScreenName:   screenNameOriginal.IdentScreenName(),
@@ -982,13 +894,8 @@ func TestUpdateDisplayScreenName(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SetWorkInfo(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("testuser")
 	user := User{
 		IdentScreenName: screenName,
@@ -1069,14 +976,9 @@ func TestSQLiteUserStore_SetWorkInfo(t *testing.T) {
 
 func TestSQLiteUserStore_SetMoreInfo(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create a test user
 	screenName := NewIdentScreenName("testuser")
 	user := User{
@@ -1146,14 +1048,9 @@ func TestSQLiteUserStore_SetMoreInfo(t *testing.T) {
 
 func TestSQLiteUserStore_SetUserNotes(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create a test user
 	screenName := NewIdentScreenName("testuser")
 	user := User{
@@ -1202,14 +1099,9 @@ func TestSQLiteUserStore_SetUserNotes(t *testing.T) {
 
 func TestSQLiteUserStore_SetInterests(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create a test user
 	screenName := NewIdentScreenName("testuser")
 	user := User{
@@ -1279,14 +1171,9 @@ func TestSQLiteUserStore_SetInterests(t *testing.T) {
 
 func TestSQLiteUserStore_SetAffiliations(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create a test user
 	screenName := NewIdentScreenName("testuser")
 	user := User{
@@ -1368,14 +1255,9 @@ func TestSQLiteUserStore_SetAffiliations(t *testing.T) {
 
 func TestSQLiteUserStore_SetBasicInfo(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create a test user
 	screenName := NewIdentScreenName("testuser")
 	user := User{
@@ -1463,14 +1345,9 @@ func TestSQLiteUserStore_SetBasicInfo(t *testing.T) {
 
 func TestSQLiteUserStore_FindByICQInterests(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users with different interests
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
@@ -1571,14 +1448,9 @@ func TestSQLiteUserStore_FindByICQInterests(t *testing.T) {
 
 func TestSQLiteUserStore_FindByICQKeyword(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users with different interests
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
@@ -1647,14 +1519,9 @@ func TestSQLiteUserStore_FindByICQKeyword(t *testing.T) {
 
 func TestSQLiteUserStore_FindByICQName(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users with different details using SetBasicInfo
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
@@ -1755,16 +1622,54 @@ func TestSQLiteUserStore_FindByICQName(t *testing.T) {
 	})
 }
 
+func TestSQLiteUserStore_FindByICQNameAndHomeLocationPattern(t *testing.T) {
+	f := newTestSQLiteUserStore(t)
+	u1 := User{IdentScreenName: NewIdentScreenName("wp901")}
+	require.NoError(t, f.InsertUser(context.Background(), u1))
+	require.NoError(t, f.SetBasicInfo(context.Background(), u1.IdentScreenName, ICQBasicInfo{
+		FirstName: "Jane",
+		Nickname:  "Janey",
+		City:      "Boston",
+		State:     "MA",
+	}))
+	u2 := User{IdentScreenName: NewIdentScreenName("wp902")}
+	require.NoError(t, f.InsertUser(context.Background(), u2))
+	require.NoError(t, f.SetBasicInfo(context.Background(), u2.IdentScreenName, ICQBasicInfo{
+		FirstName: "Jane",
+		Nickname:  "Other",
+		City:      "Cambridge",
+		State:     "MA",
+	}))
+
+	users, err := f.FindByICQNameAndHomeLocationPattern(context.Background(), "jane%", "", "", "boston%", "")
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, u1.IdentScreenName, users[0].IdentScreenName)
+}
+
+func TestSQLiteUserStore_FindByICQNameNickContains(t *testing.T) {
+	f := newTestSQLiteUserStore(t)
+	u := User{IdentScreenName: NewIdentScreenName("uin90001")}
+	require.NoError(t, f.InsertUser(context.Background(), u))
+	require.NoError(t, f.SetBasicInfo(context.Background(), u.IdentScreenName, ICQBasicInfo{
+		Nickname: "TheAmazingStarPlayer",
+	}))
+
+	users, err := f.FindByICQNameNickContains(context.Background(), "Star", 10)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, u.IdentScreenName, users[0].IdentScreenName)
+
+	empty, err := f.FindByICQNameNickContains(context.Background(), "", 10)
+	require.NoError(t, err)
+	assert.Nil(t, empty)
+}
+
 func TestSQLiteUserStore_FindByDirectoryInfo(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users with different directory info
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
@@ -1880,14 +1785,9 @@ func TestSQLiteUserStore_FindByDirectoryInfo(t *testing.T) {
 
 func TestSQLiteUserStore_FindByICQEmail(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users with different email addresses using SetBasicInfo
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
@@ -1947,13 +1847,8 @@ func TestSQLiteUserStore_FindByICQEmail(t *testing.T) {
 }
 
 func TestSQLiteUserStore_FindByAIMEmail(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("user1"),
 	}
@@ -2006,14 +1901,9 @@ func TestSQLiteUserStore_FindByAIMEmail(t *testing.T) {
 
 func TestSQLiteUserStore_FindByUIN(t *testing.T) {
 	// Cleanup after test
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	// Initialize the SQLiteUserStore with a test database file
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	// Create and set up test users where UIN is the same as IdentScreenName
 	user1 := User{
 		IdentScreenName: NewIdentScreenName("12345"),
@@ -2058,13 +1948,7 @@ func TestSQLiteUserStore_FindByUIN(t *testing.T) {
 }
 
 func TestSQLiteUserStore_RetrieveMessages(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
 	createStubUser := func(t *testing.T, store SQLiteUserStore, screenName DisplayScreenName) {
 		t.Helper()
 		user := User{
@@ -2140,13 +2024,7 @@ func TestSQLiteUserStore_RetrieveMessages(t *testing.T) {
 }
 
 func TestSQLiteUserStore_DeleteMessages(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
 	createStubUser := func(t *testing.T, store SQLiteUserStore, screenName DisplayScreenName) {
 		t.Helper()
 		user := User{
@@ -2229,13 +2107,7 @@ func TestSQLiteUserStore_DeleteMessages(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SaveMessage(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	store, err := NewSQLiteUserStore(testFile)
-	require.NoError(t, err)
-
+	store := newTestSQLiteUserStore(t)
 	createStubUser := func(t *testing.T, store SQLiteUserStore, screenName DisplayScreenName) {
 		t.Helper()
 		user := User{
@@ -2302,15 +2174,11 @@ func TestSQLiteUserStore_SaveMessage(t *testing.T) {
 }
 
 func TestSQLiteUserStore_BuddyIconMetadataExistingRef(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
 	screenName := NewIdentScreenName("TalkingTyler")
 	testHash := []byte{'t', 'h', 'e', 'h', 'a', 's', 'h'}
 
-	feedbagStore, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	feedbagStore := newTestSQLiteUserStore(t)
+	var err error
 	itemsIn := []wire.FeedbagItem{
 		{
 			Name:    "1",
@@ -2337,17 +2205,12 @@ func TestSQLiteUserStore_BuddyIconMetadataExistingRef(t *testing.T) {
 }
 
 func TestSQLiteUserStore_BuddyIconMetadataMissingRef(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
 	existingScreenName := NewIdentScreenName("TalkingTyler")
 	queryScreenName := NewIdentScreenName("SingingSuzy")
 	testHash := []byte{'t', 'h', 'e', 'h', 'a', 's', 'h'}
 
-	feedbagStore, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	feedbagStore := newTestSQLiteUserStore(t)
+	var err error
 	itemsIn := []wire.FeedbagItem{
 		{
 			Name:    "1",
@@ -2374,13 +2237,8 @@ func TestSQLiteUserStore_BuddyIconMetadataMissingRef(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SetDirectoryInfo(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("testuser")
 	user := User{
 		IdentScreenName: screenName,
@@ -2448,12 +2306,8 @@ func TestSQLiteUserStore_SetDirectoryInfo(t *testing.T) {
 
 func TestSQLiteUserStore_Categories(t *testing.T) {
 	t.Run("Retrieve Keyword Categories Successfully", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert some test keyword categories
 		categories := []string{"Category3", "Category1", "Category2"}
 		for _, categoryName := range categories {
@@ -2485,12 +2339,8 @@ func TestSQLiteUserStore_Categories(t *testing.T) {
 	})
 
 	t.Run("No Categories Exist", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Clean up the database
 		_, err = f.db.Exec(`DELETE FROM aimKeywordCategory`)
 		assert.NoError(t, err)
@@ -2501,12 +2351,8 @@ func TestSQLiteUserStore_Categories(t *testing.T) {
 	})
 
 	t.Run("SQL Error Handling", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Force an error by querying a non-existent table
 		_, err = f.db.Exec(`DROP TABLE aimKeywordCategory`)
 		assert.NoError(t, err)
@@ -2516,12 +2362,8 @@ func TestSQLiteUserStore_Categories(t *testing.T) {
 	})
 
 	t.Run("Unique Constraint Violation", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a category with a unique name
 		categoryName := "UniqueCategory"
 		_, err = f.CreateCategory(context.Background(), categoryName)
@@ -2535,12 +2377,8 @@ func TestSQLiteUserStore_Categories(t *testing.T) {
 
 func TestSQLiteUserStore_CreateCategory(t *testing.T) {
 	t.Run("Successfully Create Keyword Category", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		categoryName := "TestCategory"
 		keywordCategory, err := f.CreateCategory(context.Background(), categoryName)
 		assert.NoError(t, err)
@@ -2556,12 +2394,8 @@ func TestSQLiteUserStore_CreateCategory(t *testing.T) {
 	})
 
 	t.Run("Duplicate Category Cookie", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		categoryName := "DuplicateCategory"
 
 		// Create the category
@@ -2574,12 +2408,8 @@ func TestSQLiteUserStore_CreateCategory(t *testing.T) {
 	})
 
 	t.Run("ID Overflow", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Simulate ID overflow by inserting max number of entries
 		for i := range math.MaxUint8 {
 			_, err := f.CreateCategory(context.Background(), fmt.Sprintf("Category_%d", i))
@@ -2592,12 +2422,8 @@ func TestSQLiteUserStore_CreateCategory(t *testing.T) {
 	})
 
 	t.Run("SQL Error Handling", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Drop the table to cause an error
 		_, err = f.db.Exec(`DROP TABLE aimKeywordCategory`)
 		assert.NoError(t, err)
@@ -2609,12 +2435,8 @@ func TestSQLiteUserStore_CreateCategory(t *testing.T) {
 
 func TestSQLiteUserStore_DeleteCategory(t *testing.T) {
 	t.Run("Successfully Delete Keyword Category", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a test category
 		categoryName := "CategoryToDelete"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2636,12 +2458,8 @@ func TestSQLiteUserStore_DeleteCategory(t *testing.T) {
 	})
 
 	t.Run("Delete Non-Existent Category", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Attempt to delete a category that does not exist
 		nonExistentCategoryID := uint8(99)
 		err = f.DeleteCategory(context.Background(), nonExistentCategoryID)
@@ -2649,12 +2467,8 @@ func TestSQLiteUserStore_DeleteCategory(t *testing.T) {
 	})
 
 	t.Run("Delete category and all of its keywords", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a category
 		categoryName := "CategoryInUse"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2683,12 +2497,8 @@ func TestSQLiteUserStore_DeleteCategory(t *testing.T) {
 
 func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	t.Run("Successfully Create Keyword", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Create a test category
 		categoryName := "TestCategory"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2714,12 +2524,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	})
 
 	t.Run("Create Keyword Without Category", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a keyword with no category (parent is NULL)
 		keywordName := "UncategorizedKeyword"
 		keyword, err := f.CreateKeyword(context.Background(), keywordName, 0)
@@ -2740,12 +2546,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	})
 
 	t.Run("Create Keyword With Unknown Category", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a keyword with no category (parent is NULL)
 		keywordName := "AKeyword"
 		_, err = f.CreateKeyword(context.Background(), keywordName, 1)
@@ -2753,12 +2555,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	})
 
 	t.Run("Duplicate Keyword Cookie", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		keywordName := "DuplicateKeyword"
 
 		// Create the keyword
@@ -2771,12 +2569,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	})
 
 	t.Run("ID Overflow", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Create a test category
 		categoryName := "OverflowCategory"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2794,12 +2588,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 	})
 
 	t.Run("SQL Error Handling", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Drop the table to cause an error
 		_, err = f.db.Exec(`DROP TABLE aimKeyword`)
 		assert.NoError(t, err)
@@ -2811,12 +2601,8 @@ func TestSQLiteUserStore_CreateKeyword(t *testing.T) {
 
 func TestSQLiteUserStore_DeleteKeyword(t *testing.T) {
 	t.Run("Successfully Delete Keyword", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a category
 		categoryName := "TestCategory"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2843,12 +2629,8 @@ func TestSQLiteUserStore_DeleteKeyword(t *testing.T) {
 	})
 
 	t.Run("Delete Non-Existent Keyword", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Attempt to delete a keyword that does not exist
 		nonExistentKeywordID := uint8(99)
 		err = f.DeleteKeyword(context.Background(), nonExistentKeywordID)
@@ -2856,12 +2638,8 @@ func TestSQLiteUserStore_DeleteKeyword(t *testing.T) {
 	})
 
 	t.Run("Delete Keyword Associated with User", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Insert a category
 		categoryName := "CategoryInUse"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -2890,12 +2668,8 @@ func TestSQLiteUserStore_DeleteKeyword(t *testing.T) {
 
 func TestSQLiteUserStore_InterestList(t *testing.T) {
 	t.Run("Full list", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		tech, err := f.CreateCategory(context.Background(), "Technology")
 		assert.NoError(t, err)
 		music, err := f.CreateCategory(context.Background(), "Music")
@@ -2991,12 +2765,8 @@ func TestSQLiteUserStore_InterestList(t *testing.T) {
 	})
 
 	t.Run("Empty list list", func(t *testing.T) {
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		actual, err := f.InterestList(context.Background())
 		assert.NoError(t, err)
 		assert.Empty(t, actual)
@@ -3005,12 +2775,8 @@ func TestSQLiteUserStore_InterestList(t *testing.T) {
 
 func TestSQLiteUserStore_KeywordsByCategory(t *testing.T) {
 	t.Run("Category Does Not Exist", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		// Create a test category
 		categoryName := "TestCategory"
 		category, err := f.CreateCategory(context.Background(), categoryName)
@@ -3023,13 +2789,8 @@ func TestSQLiteUserStore_KeywordsByCategory(t *testing.T) {
 }
 
 func TestSQLiteUserStore_UnregisterBuddyList(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	users := []IdentScreenName{
 		NewIdentScreenName("user1"),
 		NewIdentScreenName("user2"),
@@ -3076,18 +2837,18 @@ func TestSQLiteUserStore_UnregisterBuddyList(t *testing.T) {
 			IsOnTheirList: true,
 			IsOnYourList:  true,
 		},
+		{
+			User:          NewIdentScreenName("user3"),
+			IsOnTheirList: false,
+			IsOnYourList:  true,
+		},
 	}
 	assert.ElementsMatch(t, relationships, expect)
 }
 
 func TestSQLiteUserStore_ClearBuddyListRegistry(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	users := []IdentScreenName{
 		NewIdentScreenName("user1"),
 		NewIdentScreenName("user2"),
@@ -3125,13 +2886,8 @@ func TestSQLiteUserStore_ClearBuddyListRegistry(t *testing.T) {
 }
 
 func TestSQLiteUserStore_RemoveBuddy(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	me := NewIdentScreenName("me")
 	err = f.RegisterBuddyList(context.Background(), me)
 	assert.NoError(t, err)
@@ -3172,13 +2928,8 @@ func TestSQLiteUserStore_RemoveBuddy(t *testing.T) {
 }
 
 func TestSQLiteUserStore_RemoveDenyBuddy(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	me := NewIdentScreenName("me")
 	err = f.RegisterBuddyList(context.Background(), me)
 	assert.NoError(t, err)
@@ -3225,13 +2976,8 @@ func TestSQLiteUserStore_RemoveDenyBuddy(t *testing.T) {
 }
 
 func TestSQLiteUserStore_RemovePermitBuddy(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	me := NewIdentScreenName("me")
 	err = f.RegisterBuddyList(context.Background(), me)
 	assert.NoError(t, err)
@@ -3279,13 +3025,8 @@ func TestSQLiteUserStore_RemovePermitBuddy(t *testing.T) {
 
 func TestSQLiteUserStore_SetPDMode(t *testing.T) {
 	t.Run("Ensure idempotency", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		users := []IdentScreenName{
 			NewIdentScreenName("me"),
 			NewIdentScreenName("them1"),
@@ -3315,13 +3056,8 @@ func TestSQLiteUserStore_SetPDMode(t *testing.T) {
 	})
 
 	t.Run("Ensure transition from one mode to another clears previously set flags", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		users := []IdentScreenName{
 			NewIdentScreenName("me"),
 			NewIdentScreenName("them1"),
@@ -3343,13 +3079,8 @@ func TestSQLiteUserStore_SetPDMode(t *testing.T) {
 
 // Ensure that transitioning between all the PD modes works.
 func TestSQLiteUserStore_PermitDenyTransitionIntegration(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	users := []IdentScreenName{
 		NewIdentScreenName("me"),
 		NewIdentScreenName("them1"),
@@ -3560,13 +3291,8 @@ func TestSQLiteUserStore_PermitDenyTransitionIntegration(t *testing.T) {
 }
 
 func TestSQLiteUserStore_UpdateSuspendedStatus(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("userA")
 
 	insertedUser := &User{
@@ -3590,13 +3316,8 @@ func TestSQLiteUserStore_UpdateSuspendedStatus(t *testing.T) {
 }
 
 func TestSQLiteUserStore_SetBotStatus(t *testing.T) {
-	defer func() {
-		assert.NoError(t, os.Remove(testFile))
-	}()
-
-	f, err := NewSQLiteUserStore(testFile)
-	assert.NoError(t, err)
-
+	f := newTestSQLiteUserStore(t)
+	var err error
 	screenName := NewIdentScreenName("userA")
 
 	insertedUser := &User{
@@ -3630,13 +3351,8 @@ func TestSQLiteUserStore_SetBotStatus(t *testing.T) {
 
 func TestSQLiteUserStore_SetWarnLevel(t *testing.T) {
 	t.Run("Happy Path - Update Warning Level for Existing User", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		screenName := NewIdentScreenName("testuser")
 		user := User{
 			IdentScreenName: screenName,
@@ -3659,13 +3375,8 @@ func TestSQLiteUserStore_SetWarnLevel(t *testing.T) {
 	})
 
 	t.Run("User Does Not Exist", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		assert.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		nonExistentScreenName := NewIdentScreenName("nonexistentuser")
 		lastWarnUpdate := time.Date(2023, 12, 1, 10, 30, 0, 0, time.UTC)
 		lastWarnLevel := uint16(5)
@@ -3677,13 +3388,8 @@ func TestSQLiteUserStore_SetWarnLevel(t *testing.T) {
 
 func TestSQLiteUserStore_DeleteBARTItem(t *testing.T) {
 	t.Run("delete_existing_item", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		require.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		ctx := context.Background()
 
 		// Insert a BART item first
@@ -3710,13 +3416,8 @@ func TestSQLiteUserStore_DeleteBARTItem(t *testing.T) {
 	})
 
 	t.Run("delete_nonexistent_item", func(t *testing.T) {
-		defer func() {
-			assert.NoError(t, os.Remove(testFile))
-		}()
-
-		f, err := NewSQLiteUserStore(testFile)
-		require.NoError(t, err)
-
+		f := newTestSQLiteUserStore(t)
+		var err error
 		ctx := context.Background()
 		hash := []byte("nonexistent")
 

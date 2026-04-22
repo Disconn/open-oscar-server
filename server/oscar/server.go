@@ -322,7 +322,7 @@ func (s oscarServer) connectToOSCARService(
 					s.Logger.ErrorContext(ctx, "error sending buddy departure notifications", "err", err.Error())
 				}
 			} else {
-				if err := s.DepartureNotifier.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+				if err := s.DepartureNotifier.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 					s.Logger.ErrorContext(ctx, "error sending buddy arrival notifications", "err", err.Error())
 				}
 			}
@@ -334,9 +334,9 @@ func (s oscarServer) connectToOSCARService(
 				return errors.New("unable to parse ip addr")
 			}
 			instance.SetRemoteAddr(&ip)
+			instance.Session().SetICQBOSAdvertisedHostPort(listener.BOSAdvertisedHostPlain)
 		}
 
-		go s.receiveSessMessages(ctx, instance, flapc)
 	case wire.Chat:
 		sessCfg := func(sess *state.Session) {
 			sess.OnSessionClose(func() {
@@ -356,7 +356,6 @@ func (s oscarServer) connectToOSCARService(
 			instance.CloseInstance()
 		}()
 
-		go s.receiveSessMessages(ctx, instance, flapc)
 	default:
 		instance, err = s.AuthService.RetrieveBOSSession(ctx, cookie)
 		if err != nil {
@@ -368,6 +367,11 @@ func (s oscarServer) connectToOSCARService(
 	}
 
 	ctx = context.WithValue(ctx, "screenName", instance.IdentScreenName())
+
+	switch cookie.Service {
+	case wire.BOS, wire.Chat:
+		go s.receiveSessMessages(ctx, instance, flapc)
+	}
 
 	msg := s.OnlineNotifier.HostOnline(cookie.Service)
 	if err := flapc.SendSNAC(msg.Frame, msg.Body); err != nil {
@@ -399,6 +403,24 @@ func (s oscarServer) receiveSessMessages(ctx context.Context, instance *state.Se
 			if err := flapc.SendSNAC(m.Frame, m.Body); err != nil {
 				middleware.LogRequestError(ctx, s.Logger, m.Frame, err)
 			} else {
+				// The generic logger labels this "client request" because it only
+				// sees the SNAC frame — these are server→client relays, not inbound
+				// requests from the user.
+				if m.Frame.FoodGroup == wire.Buddy && m.Frame.SubGroup == wire.BuddyArrived {
+					if arrived, ok := m.Body.(wire.SNAC_0x03_0x0B_BuddyArrived); ok {
+						flags, _ := arrived.Uint16BE(wire.OServiceUserInfoUserFlags)
+						status, _ := arrived.Uint32BE(wire.OServiceUserInfoStatus)
+						s.Logger.DebugContext(ctx, "relay BuddyArrived (server→client)",
+							"to", instance.IdentScreenName().String(),
+							"buddy", arrived.ScreenName,
+							"user_flags_hex", fmt.Sprintf("0x%04X", flags),
+							"status_hex", fmt.Sprintf("0x%08X", status),
+							"has_icq_dc_tlv", arrived.HasTag(wire.OServiceUserInfoICQDC),
+							"has_caps_tlv", arrived.HasTag(wire.OServiceUserInfoOscarCaps),
+							"tlv_invisible", arrived.IsInvisible(),
+						)
+					}
+				}
 				middleware.LogRequest(ctx, s.Logger, m.Frame, m.Body)
 			}
 		}
@@ -603,7 +625,8 @@ func (s oscarServer) dispatchIncomingMessages(
 			}
 			switch flap.FrameType {
 			case wire.FLAPFrameData:
-				flapBuf := bytes.NewBuffer(flap.Payload)
+				snacWire := append([]byte(nil), flap.Payload...)
+				flapBuf := bytes.NewBuffer(snacWire)
 
 				inFrame := wire.SNACFrame{}
 				if err := wire.UnmarshalBE(&inFrame, flapBuf); err != nil {

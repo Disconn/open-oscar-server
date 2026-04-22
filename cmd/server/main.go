@@ -57,7 +57,6 @@ func main() {
 		fmt.Printf("startup failed: %s\n", err)
 		os.Exit(1)
 	}
-
 	g, ctx := errgroup.WithContext(ctx)
 
 	oscar := OSCAR(deps)

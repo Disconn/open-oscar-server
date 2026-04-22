@@ -3,6 +3,7 @@ package foodgroup
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -28,6 +29,8 @@ type OServiceService struct {
 	chatMessageRelayer    ChatMessageRelayer
 	profileManager        ProfileManager
 	offlineMessageManager OfflineMessageManager
+	feedbagManager        FeedbagManager
+	userManager           UserManager
 }
 
 // NewOServiceService creates a new instance of NewOServiceService.
@@ -44,11 +47,14 @@ func NewOServiceService(
 	chatMessageRelayer ChatMessageRelayer,
 	profileManager ProfileManager,
 	offlineMessageManager OfflineMessageManager,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
+	feedbagManager FeedbagManager,
+	userManager UserManager,
 ) *OServiceService {
 	return &OServiceService{
 		cookieIssuer:          cookieIssuer,
 		messageRelayer:        messageRelayer,
-		buddyBroadcaster:      newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster:      newBuddyNotifier(logger, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		cfg:                   cfg,
 		logger:                logger,
 		snacRateLimits:        snacRateLimits,
@@ -57,6 +63,8 @@ func NewOServiceService(
 		chatMessageRelayer:    chatMessageRelayer,
 		profileManager:        profileManager,
 		offlineMessageManager: offlineMessageManager,
+		feedbagManager:        feedbagManager,
+		userManager:           userManager,
 	}
 }
 
@@ -246,25 +254,53 @@ func (s OServiceService) UserInfoQuery(ctx context.Context, instance *state.Sess
 // SetUserInfoFields updates user info fields (e.g., invisible, away) and broadcasts
 // presence changes to buddies. Returns an updated user info message.
 func (s OServiceService) SetUserInfoFields(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0x01_0x1E_OServiceSetUserInfoFields) (wire.SNACMessage, error) {
-	if status, hasStatus := inBody.Uint32BE(wire.OServiceUserInfoStatus); hasStatus {
-		instance.SetUserStatusBitmask(status)
+	var changed bool
 
+	// ICQ (and some AIM builds) set "away" via UserFlags Unavailable (0x20) without
+	// a separate Status TLV; only handling 0x06 meant status never updated.
+	if flags, hasFlags := inBody.Uint16BE(wire.OServiceUserInfoUserFlags); hasFlags {
+		if flags&wire.OServiceUserFlagUnavailable != 0 {
+			instance.SetUserInfoFlag(wire.OServiceUserFlagUnavailable)
+		} else {
+			instance.ClearUserInfoFlag(wire.OServiceUserFlagUnavailable)
+		}
+		changed = true
+	}
+
+	if raw, ok := inBody.Bytes(wire.OServiceUserInfoStatus); ok && len(raw) >= 4 {
+		status := binary.BigEndian.Uint32(raw)
+		instance.SetUserStatusBitmask(status)
+		changed = true
+	}
+
+	// ICQ 6 sometimes sends extended user flags (0x1F) without repeating 0x01/0x06;
+	// skipping buddy refresh leaves contact flowers stuck on the last state.
+	if !changed {
+		for _, tlv := range inBody.TLVList {
+			if tlv.Tag == wire.OServiceUserInfoUserFlags2 {
+				changed = true
+				break
+			}
+		}
+	}
+
+	if changed {
 		if instance.Session().Invisible() {
 			if err := s.buddyBroadcaster.BroadcastBuddyDeparted(ctx, instance.IdentScreenName()); err != nil {
 				return wire.SNACMessage{}, err
 			}
 		} else {
-			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 				return wire.SNACMessage{}, err
 			}
 		}
 	}
 
-	// reflect the status of this instance back to the caller, even though
-	// it does not reflect aggregated state of the session. this is necessary
-	// for the "invisible" button to properly toggle on the client.
-	info := instance.Session().TLVUserInfo()
-	info.Replace(wire.NewTLVBE(wire.OServiceUserInfoStatus, instance.UserStatusBitmask()))
+	// Same shape as UserInfoQuery: OService v4+ clients (ICQ 6) expect multiple
+	// TLVUserInfo blocks; a single block breaks local status UI updates.
+	update := newOServiceUserInfoUpdate(instance)
+	// Reflect this instance's status in the aggregate first block so toggles match.
+	update.UserInfo[0].Replace(wire.NewTLVBE(wire.OServiceUserInfoStatus, instance.UserStatusBitmask()))
 
 	return wire.SNACMessage{
 		Frame: wire.SNACFrame{
@@ -272,9 +308,7 @@ func (s OServiceService) SetUserInfoFields(ctx context.Context, instance *state.
 			SubGroup:  wire.OServiceUserInfoUpdate,
 			RequestID: inFrame.RequestID,
 		},
-		Body: wire.SNAC_0x01_0x0F_OServiceUserInfoUpdate{
-			UserInfo: []wire.TLVUserInfo{info},
-		},
+		Body: update,
 	}, nil
 }
 
@@ -287,7 +321,7 @@ func (s OServiceService) IdleNotification(ctx context.Context, instance *state.S
 	} else {
 		instance.SetIdle(time.Duration(inBody.IdleTime) * time.Second)
 	}
-	return s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo())
+	return s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo())
 }
 
 // SetPrivacyFlags sets client privacy settings. Currently, there's no action
@@ -679,6 +713,23 @@ func (s OServiceService) ClientOnline(ctx context.Context, service uint16, inBod
 
 	switch service {
 	case wire.BOS:
+		s.logger.DebugContext(ctx, "oservice: ClientOnline BOS",
+			"user", instance.IdentScreenName().String())
+
+		// Clear stale client-side "pending authorization" state for ICQ buddies
+		// whose AuthRequired flag is now false. ICQ6 caches its local SSI view
+		// across sessions, so a buddy that was added back when AuthRequired=true
+		// stays "pending" in the UI (white flower) even after the server-side
+		// FeedbagAttributesPending TLV has been removed. Sending a synthetic
+		// FeedbagRespondAuthorizeToClient(Accepted=1) on each login from such
+		// buddies dislodges that local state without the user having to re-add
+		// the contact. See foodgroup/feedbag.go RespondAuthorizeToHost for the
+		// canonical (interactive) flow.
+		if err := s.clearStaleICQAuthFlags(ctx, instance); err != nil {
+			s.logger.WarnContext(ctx, "oservice: clearStaleICQAuthFlags failed",
+				"user", instance.IdentScreenName().String(), "err", err.Error())
+		}
+
 		if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, nil, false); err != nil {
 			return fmt.Errorf("unable to send buddy arrival notification: %w", err)
 		}
@@ -775,6 +826,69 @@ func (s OServiceService) sendOfflineMessageNotification(ctx context.Context, ins
 	return nil
 }
 
+// clearStaleICQAuthFlags walks the user's feedbag and, for every buddy entry
+// that points to an ICQ user whose AuthRequired flag is currently false, sends
+// a synthetic FeedbagRespondAuthorizeToClient(Accepted=1) SNAC from that buddy
+// back to the just-logged-in user.
+//
+// Why this is needed: ICQ 6 caches its server-side item (SSI) view locally,
+// including the FeedbagAttributesPending flag. If a buddy was added back when
+// AuthRequired was true, that buddy stays "pending" / "white flower" in the
+// client UI even after the server-side TLV is gone, because the client never
+// re-syncs that bit. The official protocol way to clear it is SNAC(0x13,0x1B)
+// "auth granted" — which is normally only sent during the interactive auth
+// flow (see FeedbagService.RespondAuthorizeToHost). Replaying it on each
+// login is harmless when no pending state exists and dislodges stale state
+// when it does, without requiring the user to re-add the contact.
+//
+// Quietly returns nil if dependencies aren't wired (e.g. unit tests) so this
+// helper never blocks login.
+func (s OServiceService) clearStaleICQAuthFlags(ctx context.Context, instance *state.SessionInstance) error {
+	if s.feedbagManager == nil || s.userManager == nil {
+		return nil
+	}
+	me := instance.IdentScreenName()
+	items, err := s.feedbagManager.Feedbag(ctx, me)
+	if err != nil {
+		return fmt.Errorf("fetch feedbag: %w", err)
+	}
+	for _, item := range items {
+		if item.ClassID != wire.FeedbagClassIdBuddy {
+			continue
+		}
+		buddySN := state.NewIdentScreenName(item.Name)
+		if buddySN == me {
+			continue
+		}
+		buddy, err := s.userManager.User(ctx, buddySN)
+		if err != nil {
+			s.logger.DebugContext(ctx, "oservice: clearStaleICQAuthFlags: user lookup failed",
+				"buddy", buddySN.String(), "err", err.Error())
+			continue
+		}
+		if buddy == nil || !buddy.IsICQ {
+			continue
+		}
+		if buddy.ICQPermissions.AuthRequired {
+			continue
+		}
+		s.logger.DebugContext(ctx, "oservice: clearStaleICQAuthFlags: replay auth grant",
+			"user", me.String(), "buddy", buddySN.String())
+		s.messageRelayer.RelayToScreenName(ctx, me, wire.SNACMessage{
+			Frame: wire.SNACFrame{
+				FoodGroup: wire.Feedbag,
+				SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+				RequestID: wire.ReqIDFromServer,
+			},
+			Body: wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient{
+				ScreenName: buddy.IdentScreenName.String(),
+				Accepted:   1,
+			},
+		})
+	}
+	return nil
+}
+
 // sendMultipleInstanceNotification sends an IM notifying the user that their
 // account is signed in to multiple locations.
 func (s OServiceService) sendMultipleInstanceNotification(ctx context.Context, instance *state.SessionInstance) error {
@@ -823,7 +937,7 @@ func systemMessage(msg string) (wire.SNACMessage, error) {
 // AIM 6+ expects at least two user info blocks to support multi-session:
 // the first represents overall state; subsequent ones represent client instances.
 func newOServiceUserInfoUpdate(instance *state.SessionInstance) wire.SNAC_0x01_0x0F_OServiceUserInfoUpdate {
-	info := instance.Session().TLVUserInfo()
+	info := instance.Session().BuddyTLVUserInfo()
 	userInfo := []wire.TLVUserInfo{info}
 
 	// set registration date
@@ -839,7 +953,7 @@ func newOServiceUserInfoUpdate(instance *state.SessionInstance) wire.SNAC_0x01_0
 
 		for _, cur := range instance.Session().Instances() {
 			instanceInfo := wire.TLVUserInfo{
-				ScreenName:   cur.DisplayScreenName().String(),
+				ScreenName:   cur.Session().BuddyWireScreenName(),
 				WarningLevel: cur.Warning(),
 			}
 
@@ -854,12 +968,9 @@ func newOServiceUserInfoUpdate(instance *state.SessionInstance) wire.SNAC_0x01_0
 			}
 			instanceInfo.Append(wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uFlags))
 
-			// user status flags - user-level (shared)
-			var statusBitmask uint32
-			if cur.Invisible() {
-				statusBitmask |= wire.OServiceUserStatusInvisible
-			}
-			instanceInfo.Append(wire.NewTLVBE(wire.OServiceUserInfoStatus, statusBitmask))
+			// Per-instance status word (away, DND, …); not only invisible — ICQ/AIM 6
+			// clients read this block for the current connection's mode.
+			instanceInfo.Append(wire.NewTLVBE(wire.OServiceUserInfoStatus, cur.UserStatusBitmask()))
 
 			if cur == instance {
 				if icon, hasIcon := cur.Session().BuddyIcon(); hasIcon {

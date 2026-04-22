@@ -2407,7 +2407,7 @@ func (s OSCARProxy) Signon(ctx context.Context, args []byte, recalcWarning func(
 				s.Logger.ErrorContext(ctx, "error sending buddy departure notifications", "err", err.Error())
 			}
 		} else {
-			if err := s.BuddyService.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+			if err := s.BuddyService.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 				s.Logger.ErrorContext(ctx, "error sending buddy arrival notifications", "err", err.Error())
 			}
 		}

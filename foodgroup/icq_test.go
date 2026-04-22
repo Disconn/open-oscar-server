@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/mk6i/open-oscar-server/state"
 	"github.com/mk6i/open-oscar-server/wire"
@@ -124,7 +126,7 @@ func TestICQService_FindByICQName(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -231,8 +233,8 @@ func TestICQService_FindByICQName(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -301,7 +303,7 @@ func TestICQService_FindByICQEmail(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -367,8 +369,8 @@ func TestICQService_FindByICQEmail(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -443,7 +445,7 @@ func TestICQService_FindByEmail3(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -509,8 +511,8 @@ func TestICQService_FindByEmail3(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -579,7 +581,7 @@ func TestICQService_FindByUIN(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -645,8 +647,8 @@ func TestICQService_FindByUIN(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -719,7 +721,7 @@ func TestICQService_FindByUIN2(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -785,8 +787,8 @@ func TestICQService_FindByUIN2(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -877,7 +879,7 @@ func TestICQService_FindByWhitePages(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -984,8 +986,8 @@ func TestICQService_FindByWhitePages(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -1007,15 +1009,26 @@ func TestICQService_FindByWhitePages(t *testing.T) {
 	}
 }
 
+// findByICQNamePatternExpect wires a mockICQUserFinder.FindByICQNamePattern
+// expectation for the ICQ6 prefix-search path.
+type findByICQNamePatternExpect struct {
+	firstPat string
+	lastPat  string
+	nickPat  string
+	result   []state.User
+	err      error
+}
+
 func TestICQService_FindByWhitePages2(t *testing.T) {
 	tests := []struct {
-		name       string
-		timeNow    func() time.Time
-		seq        uint16
-		instance   *state.SessionInstance
-		req        wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2
-		mockParams mockParams
-		wantErr    error
+		name              string
+		timeNow           func() time.Time
+		seq               uint16
+		instance          *state.SessionInstance
+		req               wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2
+		mockParams        mockParams
+		namePatternExpect []findByICQNamePatternExpect
+		wantErr           error
 	}{
 		{
 			name: "search by keyword",
@@ -1082,7 +1095,7 @@ func TestICQService_FindByWhitePages2(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -1206,38 +1219,39 @@ func TestICQService_FindByWhitePages2(t *testing.T) {
 					},
 				},
 			},
-			mockParams: mockParams{
-				icqUserFinderParams: icqUserFinderParams{
-					findByDetailsParams: findByDetailsParams{
+			// ICQ6 sends bare names without wildcards, so the service
+			// rewrites them to LIKE prefix patterns ("Jane" -> "Jane%")
+			// and calls FindByICQNamePattern instead of FindByICQName.
+			namePatternExpect: []findByICQNamePatternExpect{
+				{
+					firstPat: "Jane%",
+					lastPat:  "Janey%",
+					nickPat:  "Janey%",
+					result: []state.User{
 						{
-							nickName:  "Janey",
-							firstName: "Jane",
-							lastName:  "Janey",
-							result: []state.User{
-								{
-									IdentScreenName: state.NewIdentScreenName("987654321"),
-									ICQBasicInfo: state.ICQBasicInfo{
-										EmailAddress: "janey@example.com",
-										FirstName:    "Jane",
-										LastName:     "Doe",
-										Nickname:     "Janey",
-									},
-									ICQPermissions: state.ICQPermissions{
-										AuthRequired: false,
-									},
-									ICQMoreInfo: state.ICQMoreInfo{
-										BirthDay:   31,
-										BirthMonth: 7,
-										BirthYear:  1995,
-										Gender:     2,
-									},
-								},
+							IdentScreenName: state.NewIdentScreenName("987654321"),
+							ICQBasicInfo: state.ICQBasicInfo{
+								EmailAddress: "janey@example.com",
+								FirstName:    "Jane",
+								LastName:     "Doe",
+								Nickname:     "Janey",
+							},
+							ICQPermissions: state.ICQPermissions{
+								AuthRequired: false,
+							},
+							ICQMoreInfo: state.ICQMoreInfo{
+								BirthDay:   31,
+								BirthMonth: 7,
+								BirthYear:  1995,
+								Gender:     2,
 							},
 						},
 					},
 				},
+			},
+			mockParams: mockParams{
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -1292,6 +1306,288 @@ func TestICQService_FindByWhitePages2(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "search by UIN tlv (whitepages2 / ICQ6 directory)",
+			timeNow: func() time.Time {
+				return time.Date(2020, time.August, 1, 0, 0, 0, 0, time.UTC)
+			},
+			seq:      1,
+			instance: newTestInstance("11111111", sessOptUIN(11111111)),
+			req: wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2{
+				TLVRestBlock: wire.TLVRestBlock{
+					TLVList: wire.TLVList{
+						wire.NewTLVLE(wire.ICQTLVTagsUIN, uint32(444555666)),
+					},
+				},
+			},
+			mockParams: mockParams{
+				icqUserFinderParams: icqUserFinderParams{
+					findByUINParams: findByUINParams{
+						{
+							UIN: 444555666,
+							result: state.User{
+								IdentScreenName: state.NewIdentScreenName("444555666"),
+								ICQBasicInfo: state.ICQBasicInfo{
+									EmailAddress: "uinsearch@example.com",
+									FirstName:    "U",
+									LastName:     "Ser",
+									Nickname:     "UinNick",
+								},
+								ICQPermissions: state.ICQPermissions{AuthRequired: false},
+								ICQMoreInfo: state.ICQMoreInfo{
+									BirthDay: 1, BirthMonth: 1, BirthYear: 1990, Gender: 2,
+								},
+							},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("11111111"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.ICQ,
+									SubGroup:  wire.ICQDBReply,
+								},
+								Body: wire.SNAC_0x15_0x02_DBReply{
+									TLVRestBlock: wire.TLVRestBlock{
+										TLVList: wire.TLVList{
+											wire.NewTLVBE(wire.ICQTLVTagsMetadata, wire.ICQMessageReplyEnvelope{
+												Message: wire.ICQ_0x07DA_0x01AE_DBQueryMetaReplyLastUserFound{
+													ICQMetadata: wire.ICQMetadata{
+														UIN:     11111111,
+														ReqType: wire.ICQDBQueryMetaReply,
+														Seq:     1,
+													},
+													Success:    wire.ICQStatusCodeOK,
+													ReqSubType: wire.ICQDBQueryMetaReplyLastUserFound,
+													Details: wire.ICQUserSearchRecord{
+														UIN:           444555666,
+														Nickname:      "UinNick",
+														FirstName:     "U",
+														LastName:      "Ser",
+														Email:         "uinsearch@example.com",
+														Authorization: 0,
+														OnlineStatus:  0,
+														Gender:        2,
+														Age:           30,
+													},
+													LastMessageFooter: &struct {
+														FoundUsersLeft uint32
+													}{FoundUsersLeft: 0},
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams{
+						{screenName: state.NewIdentScreenName("444555666"), result: nil},
+					},
+				},
+			},
+		},
+		{
+			name: "search by email tlv (whitepages2)",
+			timeNow: func() time.Time {
+				return time.Date(2020, time.August, 1, 0, 0, 0, 0, time.UTC)
+			},
+			seq:      1,
+			instance: newTestInstance("11111111", sessOptUIN(11111111)),
+			req: wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2{
+				TLVRestBlock: wire.TLVRestBlock{
+					TLVList: wire.TLVList{
+						wire.NewTLVLE(wire.ICQTLVTagsEmail, struct {
+							Val string `oscar:"len_prefix=uint16,nullterm"`
+						}{Val: "jane@example.com"}),
+					},
+				},
+			},
+			mockParams: mockParams{
+				icqUserFinderParams: icqUserFinderParams{
+					findByEmailParams: findByEmailParams{
+						{
+							email: "jane@example.com",
+							result: state.User{
+								IdentScreenName: state.NewIdentScreenName("999888777"),
+								ICQBasicInfo: state.ICQBasicInfo{
+									EmailAddress: "jane@example.com",
+									FirstName:    "Jane",
+									LastName:     "Mail",
+									Nickname:     "JMail",
+								},
+								ICQPermissions: state.ICQPermissions{AuthRequired: false},
+								ICQMoreInfo: state.ICQMoreInfo{
+									BirthDay: 15, BirthMonth: 6, BirthYear: 1988, Gender: 1,
+								},
+							},
+						},
+					},
+				},
+				messageRelayerParams: messageRelayerParams{
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("11111111"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.ICQ,
+									SubGroup:  wire.ICQDBReply,
+								},
+								Body: wire.SNAC_0x15_0x02_DBReply{
+									TLVRestBlock: wire.TLVRestBlock{
+										TLVList: wire.TLVList{
+											wire.NewTLVBE(wire.ICQTLVTagsMetadata, wire.ICQMessageReplyEnvelope{
+												Message: wire.ICQ_0x07DA_0x01AE_DBQueryMetaReplyLastUserFound{
+													ICQMetadata: wire.ICQMetadata{
+														UIN:     11111111,
+														ReqType: wire.ICQDBQueryMetaReply,
+														Seq:     1,
+													},
+													Success:    wire.ICQStatusCodeOK,
+													ReqSubType: wire.ICQDBQueryMetaReplyLastUserFound,
+													Details: wire.ICQUserSearchRecord{
+														UIN:           999888777,
+														Nickname:      "JMail",
+														FirstName:     "Jane",
+														LastName:      "Mail",
+														Email:         "jane@example.com",
+														Authorization: 0,
+														OnlineStatus:  0,
+														Gender:        1,
+														Age:           32,
+													},
+													LastMessageFooter: &struct {
+														FoundUsersLeft uint32
+													}{FoundUsersLeft: 0},
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams{
+						{screenName: state.NewIdentScreenName("999888777"), result: nil},
+					},
+				},
+			},
+		},
+		{
+			name: "search by name and home city tlv filters results",
+			timeNow: func() time.Time {
+				return time.Date(2020, time.August, 1, 0, 0, 0, 0, time.UTC)
+			},
+			seq:      1,
+			instance: newTestInstance("11111111", sessOptUIN(11111111)),
+			req: wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2{
+				TLVRestBlock: wire.TLVRestBlock{
+					TLVList: wire.TLVList{
+						wire.NewTLVLE(wire.ICQTLVTagsNickname, struct {
+							Val string `oscar:"len_prefix=uint16,nullterm"`
+						}{Val: "Janey"}),
+						wire.NewTLVLE(wire.ICQTLVTagsHomeCityName, struct {
+							Val string `oscar:"len_prefix=uint16,nullterm"`
+						}{Val: "Boston"}),
+					},
+				},
+			},
+			namePatternExpect: []findByICQNamePatternExpect{
+				{
+					firstPat: "",
+					lastPat:  "",
+					nickPat:  "Janey%",
+					result: []state.User{
+						{
+							IdentScreenName: state.NewIdentScreenName("987654321"),
+							ICQBasicInfo: state.ICQBasicInfo{
+								EmailAddress: "janey@example.com",
+								FirstName:    "Jane",
+								LastName:     "Doe",
+								Nickname:     "Janey",
+								City:         "Boston",
+							},
+							ICQPermissions: state.ICQPermissions{AuthRequired: false},
+							ICQMoreInfo: state.ICQMoreInfo{
+								BirthDay: 31, BirthMonth: 7, BirthYear: 1995, Gender: 2,
+							},
+						},
+						{
+							IdentScreenName: state.NewIdentScreenName("123456789"),
+							ICQBasicInfo: state.ICQBasicInfo{
+								EmailAddress: "other@example.com",
+								FirstName:    "Jane",
+								LastName:     "X",
+								Nickname:     "Janey",
+								City:         "Cambridge",
+							},
+							ICQPermissions: state.ICQPermissions{AuthRequired: true},
+							ICQMoreInfo: state.ICQMoreInfo{
+								BirthDay: 1, BirthMonth: 1, BirthYear: 1999, Gender: 1,
+							},
+						},
+					},
+				},
+			},
+			mockParams: mockParams{
+				messageRelayerParams: messageRelayerParams{
+					relayToSelfParams: relayToSelfParams{
+						{
+							screenName: state.NewIdentScreenName("11111111"),
+							message: wire.SNACMessage{
+								Frame: wire.SNACFrame{
+									FoodGroup: wire.ICQ,
+									SubGroup:  wire.ICQDBReply,
+								},
+								Body: wire.SNAC_0x15_0x02_DBReply{
+									TLVRestBlock: wire.TLVRestBlock{
+										TLVList: wire.TLVList{
+											wire.NewTLVBE(wire.ICQTLVTagsMetadata, wire.ICQMessageReplyEnvelope{
+												Message: wire.ICQ_0x07DA_0x01AE_DBQueryMetaReplyLastUserFound{
+													ICQMetadata: wire.ICQMetadata{
+														UIN:     11111111,
+														ReqType: wire.ICQDBQueryMetaReply,
+														Seq:     1,
+													},
+													Success:    wire.ICQStatusCodeOK,
+													ReqSubType: wire.ICQDBQueryMetaReplyLastUserFound,
+													Details: wire.ICQUserSearchRecord{
+														UIN:           987654321,
+														Nickname:      "Janey",
+														FirstName:     "Jane",
+														LastName:      "Doe",
+														Email:         "janey@example.com",
+														Authorization: 0,
+														OnlineStatus:  0,
+														Gender:        2,
+														Age:           25,
+													},
+													LastMessageFooter: &struct {
+														FoundUsersLeft uint32
+													}{FoundUsersLeft: 0},
+												},
+											}),
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+				sessionRetrieverParams: sessionRetrieverParams{
+					retrieveSessionParams{
+						{screenName: state.NewIdentScreenName("987654321"), result: nil},
+					},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1301,15 +1597,30 @@ func TestICQService_FindByWhitePages2(t *testing.T) {
 					FindByICQKeyword(matchContext(), params.keyword).
 					Return(params.result, params.err)
 			}
+			for _, params := range tt.mockParams.findByUINParams {
+				userFinder.EXPECT().
+					FindByUIN(matchContext(), params.UIN).
+					Return(params.result, params.err)
+			}
+			for _, params := range tt.mockParams.findByEmailParams {
+				userFinder.EXPECT().
+					FindByICQEmail(matchContext(), params.email).
+					Return(params.result, params.err)
+			}
 			for _, params := range tt.mockParams.findByDetailsParams {
 				userFinder.EXPECT().
 					FindByICQName(matchContext(), params.firstName, params.lastName, params.nickName).
 					Return(params.result, params.err)
 			}
+			for _, params := range tt.namePatternExpect {
+				userFinder.EXPECT().
+					FindByICQNamePattern(matchContext(), params.firstPat, params.lastPat, params.nickPat).
+					Return(params.result, params.err)
+			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			sessionRetriever := newMockSessionRetriever(t)
@@ -1329,6 +1640,41 @@ func TestICQService_FindByWhitePages2(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+// ICQ6 WhitePages2 requests often carry TLV 0x0136 (UIN) together with name
+// fields; the UIN must not preempt a real directory search.
+func TestICQService_FindByWhitePages2_nameCriteriaOverBundledUIN_TLV(t *testing.T) {
+	userFinder := newMockICQUserFinder(t)
+	userFinder.EXPECT().
+		FindByICQNamePattern(matchContext(), "", "", "party%").
+		Return([]state.User{
+			{IdentScreenName: state.NewIdentScreenName("999"), ICQBasicInfo: state.ICQBasicInfo{Nickname: "party"}},
+		}, nil)
+
+	messageRelayer := newMockMessageRelayer(t)
+	messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(state.NewIdentScreenName("11111111")), mock.Anything).Once()
+
+	sessionRetriever := newMockSessionRetriever(t)
+	sessionRetriever.EXPECT().RetrieveSession(state.NewIdentScreenName("999")).Return(nil)
+
+	s := ICQService{
+		messageRelayer:   messageRelayer,
+		sessionRetriever: sessionRetriever,
+		timeNow:          func() time.Time { return time.Date(2020, 8, 1, 0, 0, 0, 0, time.UTC) },
+		userFinder:       userFinder,
+	}
+	req := wire.ICQ_0x07D0_0x055F_DBQueryMetaReqSearchWhitePages2{
+		TLVRestBlock: wire.TLVRestBlock{
+			TLVList: wire.TLVList{
+				wire.NewTLVLE(wire.ICQTLVTagsUIN, uint32(11111111)),
+				wire.NewTLVLE(wire.ICQTLVTagsNickname, struct {
+					Val string `oscar:"len_prefix=uint16,nullterm"`
+				}{Val: "party"}),
+			},
+		},
+	}
+	require.NoError(t, s.FindByWhitePages2(context.Background(), newTestInstance("11111111", sessOptUIN(11111111)), req, 1))
 }
 
 func TestICQService_FullUserInfo(t *testing.T) {
@@ -1433,7 +1779,7 @@ func TestICQService_FullUserInfo(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -1772,8 +2118,8 @@ func TestICQService_FullUserInfo(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -1851,7 +2197,7 @@ func TestICQService_OfflineMsgReq(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -2025,9 +2371,8 @@ func TestICQService_OfflineMsgReq(t *testing.T) {
 					Return(params.messagesOut, params.err)
 			}
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().
-					RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			var icbmSenderCalls int
@@ -2116,7 +2461,7 @@ func TestICQService_SetAffiliations(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2184,8 +2529,8 @@ func TestICQService_SetAffiliations(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2224,7 +2569,7 @@ func TestICQService_SetEmails(t *testing.T) {
 			},
 			mockParams: mockParams{
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2259,8 +2604,8 @@ func TestICQService_SetEmails(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2289,7 +2634,7 @@ func TestICQService_SetICQPhone(t *testing.T) {
 			req:      wire.ICQ_0x07D0_0x0654_DBQueryMetaReqSetICQPhone{},
 			mockParams: mockParams{
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2324,8 +2669,8 @@ func TestICQService_SetICQPhone(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2392,7 +2737,7 @@ func TestICQService_SetBasicInfo(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2434,8 +2779,8 @@ func TestICQService_SetBasicInfo(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2503,7 +2848,7 @@ func TestICQService_SetInterests(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2566,8 +2911,8 @@ func TestICQService_SetInterests(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2623,7 +2968,7 @@ func TestICQService_SetMoreInfo(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2665,8 +3010,8 @@ func TestICQService_SetMoreInfo(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2709,7 +3054,7 @@ func TestICQService_SetPermissions(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2761,7 +3106,7 @@ func TestICQService_SetPermissions(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2803,8 +3148,8 @@ func TestICQService_SetPermissions(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2845,7 +3190,7 @@ func TestICQService_SetUserNotes(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2887,8 +3232,8 @@ func TestICQService_SetUserNotes(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -2951,7 +3296,7 @@ func TestICQService_SetWorkInfo(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("100003"),
 							message: wire.SNACMessage{
@@ -2993,8 +3338,8 @@ func TestICQService_SetWorkInfo(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -3051,7 +3396,7 @@ func TestICQService_ShortUserInfo(t *testing.T) {
 					},
 				},
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -3107,8 +3452,8 @@ func TestICQService_ShortUserInfo(t *testing.T) {
 			}
 
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 
 			s := ICQService{
@@ -3144,7 +3489,7 @@ func TestICQService_XMLReqData(t *testing.T) {
 			},
 			mockParams: mockParams{
 				messageRelayerParams: messageRelayerParams{
-					relayToScreenNameParams: relayToScreenNameParams{
+					relayToSelfParams: relayToSelfParams{
 						{
 							screenName: state.NewIdentScreenName("11111111"),
 							message: wire.SNACMessage{
@@ -3163,7 +3508,8 @@ func TestICQService_XMLReqData(t *testing.T) {
 														Seq:     1,
 													},
 													ReqSubType: wire.ICQDBQueryMetaReplyXMLData,
-													Success:    wire.ICQStatusCodeFail,
+													Success:    wire.ICQStatusCodeOK,
+													XML:        `<?xml version="1.0"?><response/>`,
 												},
 											}),
 										},
@@ -3179,8 +3525,8 @@ func TestICQService_XMLReqData(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			messageRelayer := newMockMessageRelayer(t)
-			for _, params := range tt.mockParams.relayToScreenNameParams {
-				messageRelayer.EXPECT().RelayToScreenName(mock.Anything, params.screenName, params.message)
+			for _, params := range tt.mockParams.relayToSelfParams {
+				messageRelayer.EXPECT().RelayToSelf(mock.Anything, matchSession(params.screenName), params.message)
 			}
 			s := ICQService{
 				messageRelayer: messageRelayer,
@@ -3190,4 +3536,12 @@ func TestICQService_XMLReqData(t *testing.T) {
 			assert.NoError(t, err)
 		})
 	}
+}
+
+func TestIcqXMLMetaReplyBody(t *testing.T) {
+	assert.Equal(t, `<?xml version="1.0"?><response/>`, icqXMLMetaReplyBody(""))
+	assert.Equal(t, `<?xml version="1.0"?><response/>`, icqXMLMetaReplyBody("  "))
+	assert.True(t, strings.Contains(icqXMLMetaReplyBody("<key>ResolverXML</key>"), "Resolver"))
+	assert.True(t, strings.Contains(icqXMLMetaReplyBody("<key>DataFilesURL</key>"), "DataFilesURL"))
+	require.True(t, strings.HasPrefix(icqXMLMetaReplyBody("other"), "<?xml"))
 }

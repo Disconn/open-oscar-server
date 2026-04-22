@@ -222,6 +222,40 @@ var (
 	CapGamesAlt = uuid.MustParse("0946134A-4C7F-11D1-2282-444553540000")
 )
 
+// ParseLocateCapabilitiesTLV decodes Locate SetInfo TLV 0x05 (capabilities).
+// Modern clients send a concatenation of 16-byte UUIDs. Older ICQ builds send
+// a sequence of big-endian uint16 "short" capability codes (family 0946…),
+// which yields a payload length that is a multiple of 2 but not of 16.
+// Rejecting those lengths caused the server to return an error from SetInfo and
+// drop the BOS session (ICQ 5 appeared to "lose connection" right after login).
+func ParseLocateCapabilitiesTLV(b []byte) ([][16]byte, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	if len(b)%16 == 0 {
+		out := make([][16]byte, 0, len(b)/16)
+		for i := 0; i < len(b); i += 16 {
+			var c [16]byte
+			copy(c[:], b[i:i+16])
+			out = append(out, c)
+		}
+		return out, nil
+	}
+	if len(b)%2 != 0 {
+		return nil, fmt.Errorf("capability list length %d is not a multiple of 16 or 2", len(b))
+	}
+	out := make([][16]byte, 0, len(b)/2)
+	for i := 0; i < len(b); i += 2 {
+		u := binary.BigEndian.Uint16(b[i : i+2])
+		uid, err := uuid.Parse(fmt.Sprintf("0946%04X-4C7F-11D1-8222-444553540000", u))
+		if err != nil {
+			return nil, fmt.Errorf("short capability 0x%04X: %w", u, err)
+		}
+		out = append(out, uid)
+	}
+	return out, nil
+}
+
 // ShortCapHexToUUID converts an OSCAR short capability code (1–4 hex digits, e.g. "1348", "1FF")
 // to the full UUID form 0946XXYY-4C7F-11D1-8222-444553540000. Returns the UUID and true if the
 // input is valid hex that fits in a uint16; otherwise returns zero UUID and false.
@@ -284,12 +318,20 @@ const (
 	OServiceBartQuery2        uint16 = 0x0022
 	OServiceBartReply2        uint16 = 0x0023
 
-	OServiceUserInfoUserFlags       uint16 = 0x01
-	OServiceUserInfoSignonTOD       uint16 = 0x03
-	OServiceUserInfoIdleTime        uint16 = 0x04
-	OServiceUserInfoMemberSince     uint16 = 0x05
-	OServiceUserInfoStatus          uint16 = 0x06
-	OServiceUserInfoICQDC           uint16 = 0x0C
+	OServiceUserInfoUserFlags     uint16 = 0x01
+	OServiceUserInfoSignonTOD     uint16 = 0x03
+	OServiceUserInfoIdleTime      uint16 = 0x04
+	OServiceUserInfoMemberSince   uint16 = 0x05
+	OServiceUserInfoStatus        uint16 = 0x06
+	OServiceUserInfoICQExternalIP uint16 = 0x0A // ICQ-only; public/external IPv4 (OSCAR userinfo docs)
+	OServiceUserInfoICQDC         uint16 = 0x0C
+	// ICQDCType* are values for TLV 0x0C (ICQDCInfo.DCType); see OSCAR ICQ DC type lists.
+	ICQDCTypeDisabled uint8 = 0x00 // disabled / auth required
+	ICQDCTypeHTTPS    uint8 = 0x01 // firewall / HTTPS proxy
+	ICQDCTypeSOCKS    uint8 = 0x02 // SOCKS4/5
+	ICQDCTypeNormal   uint8 = 0x04 // normal direct connection
+	ICQDCTypeWeb      uint8 = 0x06 // web client, no DC
+
 	OServiceUserInfoOscarCaps       uint16 = 0x0D
 	OServiceUserInfoOnlineTime      uint16 = 0x0F
 	OServiceUserInfoBARTInfo        uint16 = 0x1D
@@ -654,6 +696,26 @@ type SNAC_0x03_0x04_BuddyAddBuddies struct {
 }
 
 type SNAC_0x03_0x05_BuddyDelBuddies struct {
+	Buddies []struct {
+		ScreenName string `oscar:"len_prefix=uint8"`
+	}
+}
+
+// SNAC_0x03_0x06_BuddyWatcherListQuery is SNAC(0x03,0x06). ICQ 6 sends this to
+// query who is watching the user; the server replies with BuddyWatcherListResponse.
+type SNAC_0x03_0x06_BuddyWatcherListQuery struct {
+	TLVRestBlock
+}
+
+// SNAC_0x03_0x07_BuddyWatcherListResponse is SNAC(0x03,0x07). Body is a big-endian
+// count of watcher entries followed by len-prefixed screen names (none when zero).
+type SNAC_0x03_0x07_BuddyWatcherListResponse struct {
+	WatcherCount uint16 `oscar:""`
+}
+
+// SNAC_0x03_0x08_BuddyWatcherSubRequest is SNAC(0x03,0x08). ICQ uses this to
+// (re)subscribe to buddy presence; payload matches buddy-add style name list.
+type SNAC_0x03_0x08_BuddyWatcherSubRequest struct {
 	Buddies []struct {
 		ScreenName string `oscar:"len_prefix=uint8"`
 	}
@@ -1778,6 +1840,10 @@ const (
 	FeedbagIsAuthRequiredQuery      uint16 = 0x0023
 	FeedbagIsAuthRequiredReply      uint16 = 0x0024
 	FeedbagRecentBuddyUpdate        uint16 = 0x0025
+	// FeedbagICQExtension37 is sent by ICQ 6+ clients after SSI/auth flows; the
+	// public OSCAR docs used by this project do not name it. The server must
+	// answer on the same subtype (see handler: echo payload via SendSNACRawBody).
+	FeedbagICQExtension37 uint16 = 0x0037
 )
 
 // FeedbagPDMode represents a buddy list permit/deny mode setting that
@@ -1843,6 +1909,14 @@ type SNAC_0x13_0x11_FeedbagStartCluster struct {
 type SNAC_0x13_0x12_FeedbagEndCluster struct {
 }
 
+// SNAC_0x13_0x14_FeedbagPreAuthorizeBuddy is SNAC(0x13,0x0014): the client grants
+// add-list permission to a buddy (ICQ). See https://kingant.net/oscar/?family=0x0013&subtype=0x0014
+type SNAC_0x13_0x14_FeedbagPreAuthorizeBuddy struct {
+	BuddyUIN string `oscar:"len_prefix=uint8"`
+	Message  string `oscar:"len_prefix=uint16"`
+	Flags    uint16
+}
+
 type SNAC_0x13_0x18_FeedbagRequestAuthorizationToHost struct {
 	ScreenName string `oscar:"len_prefix=uint8"`
 	Reason     string `oscar:"len_prefix=uint16"`
@@ -1874,6 +1948,17 @@ type SNAC_0x13_0x1C_FeedbagBuddyAdded struct {
 	TLV
 	ScreenName string `oscar:"len_prefix=uint8"`
 	Nullterm   uint16
+}
+
+// SNAC_0x13_0x1C_FeedbagBuddyAddedBody is the payload for SNAC(0x13,0x001C)
+// ("you were added to someone's contact list"), documented for ICQ at
+// https://kingant.net/oscar/?family=0x0013&subtype=0x001c
+type SNAC_0x13_0x1C_FeedbagBuddyAddedBody struct {
+	InnerLen uint16 // always 6
+	A        uint16 // 1
+	B        uint16 // 2
+	C        uint16 // 2
+	UIN      string `oscar:"len_prefix=uint8"` // decimal UIN / ICQ screen name
 }
 
 //
@@ -1931,6 +2016,10 @@ const (
 	ICQTLVTagsOriginallyFromState       uint16 = 0x032A // User originally from state
 	ICQTLVTagsOriginallyFromCountryCode uint16 = 0x0334 // User originally from country (code)
 
+	// ICQDirTLVTagsUINASCII is the decimal UIN string in directory **result** rows
+	// (ICQ6 / official server: mitschnitt suchen 4 *.pcapng). Buddy bulk requests
+	// often use 0x0032 instead; both appear in client traffic.
+	ICQDirTLVTagsUINASCII       uint16 = 0x0009
 	ICQDirTLVTagsPrivacyToken   uint16 = 0x003C // Privacy token (16 bytes)
 	ICQDirTLVTagsVerifiedEmail  uint16 = 0x0050 // Verified email address
 	ICQDirTLVTagsPendingEmail   uint16 = 0x0055 // Pending email address
@@ -1996,22 +2085,28 @@ const (
 	ICQDBQueryMetaReqSearchByEmail     uint16 = 0x0529
 	ICQDBQueryMetaReqSearchWhitePages  uint16 = 0x0533
 	ICQDBQueryMetaReqSearchWhitePages2 uint16 = 0x055F
-	ICQDBQueryMetaReqSearchByUIN2      uint16 = 0x0569
-	ICQDBQueryMetaReqSearchByEmail3    uint16 = 0x0573
-	ICQDBQueryMetaReqStat0758          uint16 = 0x0758
-	ICQDBQueryMetaReqXMLReq            uint16 = 0x0898
-	ICQDBQueryMetaReqStat0a8c          uint16 = 0x0A8C
-	ICQDBQueryMetaReqStat0a96          uint16 = 0x0A96
-	ICQDBQueryMetaReqStat0aaa          uint16 = 0x0AAA
-	ICQDBQueryMetaReqStat0ab4          uint16 = 0x0AB4
-	ICQDBQueryMetaReqStat0ab9          uint16 = 0x0AB9
-	ICQDBQueryMetaReqStat0abe          uint16 = 0x0ABE
-	ICQDBQueryMetaReqStat0ac8          uint16 = 0x0AC8
-	ICQDBQueryMetaReqStat0acd          uint16 = 0x0ACD
-	ICQDBQueryMetaReqStat0ad2          uint16 = 0x0AD2
-	ICQDBQueryMetaReqStat0ad7          uint16 = 0x0AD7
-	ICQDBQueryMetaReqDirectoryQuery    uint16 = 0x0FA0
-	ICQDBQueryMetaReqDirectoryUpdate   uint16 = 0x0FD2
+	// Plain wildcard search variants (same wire layouts as their non-wildcard peers).
+	ICQDBQueryMetaReqSearchByDetailsWildcard  uint16 = 0x053D
+	ICQDBQueryMetaReqSearchByEmailWildcard    uint16 = 0x0547
+	ICQDBQueryMetaReqSearchWhitePagesWildcard uint16 = 0x0551
+	ICQDBQueryMetaReqSearchByUIN2             uint16 = 0x0569
+	ICQDBQueryMetaReqSearchByEmail3           uint16 = 0x0573
+	ICQDBQueryMetaReqStat0758                 uint16 = 0x0758
+	ICQDBQueryMetaReqXMLReq                   uint16 = 0x0898
+	ICQDBQueryMetaReqStat0a8c                 uint16 = 0x0A8C
+	ICQDBQueryMetaReqStat0a96                 uint16 = 0x0A96
+	ICQDBQueryMetaReqStat0aaa                 uint16 = 0x0AAA
+	ICQDBQueryMetaReqStat0ab4                 uint16 = 0x0AB4
+	ICQDBQueryMetaReqStat0ab9                 uint16 = 0x0AB9
+	ICQDBQueryMetaReqStat0abe                 uint16 = 0x0ABE
+	ICQDBQueryMetaReqStat0ac8                 uint16 = 0x0AC8
+	ICQDBQueryMetaReqStat0acd                 uint16 = 0x0ACD
+	ICQDBQueryMetaReqStat0ad2                 uint16 = 0x0AD2
+	ICQDBQueryMetaReqStat0ad7                 uint16 = 0x0AD7
+	ICQDBQueryMetaReqDirectoryQuery           uint16 = 0x0FA0
+	ICQDBQueryMetaReplyDirectoryData          uint16 = 0x0FAA // intermediate multi-packet response
+	ICQDBQueryMetaReplyDirectoryResponse      uint16 = 0x0FB4 // final/complete response
+	ICQDBQueryMetaReqDirectoryUpdate          uint16 = 0x0FD2 // client ack after directory self-check; reply uses 0x0FB4 + embedded 0x05B9/0x0003
 
 	ICQDBQueryMetaReplySetBasicInfo    uint16 = 0x0064
 	ICQDBQueryMetaReplySetWorkInfo     uint16 = 0x006E
@@ -2046,6 +2141,42 @@ type ICQ_0x07D0_0x04BA_DBQueryMetaReqShortInfo struct {
 
 type ICQ_0x07D0_0x0898_DBQueryMetaReqXMLReq struct {
 	XMLRequest string `oscar:"len_prefix=uint16,nullterm"`
+}
+
+type ICQ_0x07D0_0x0FA0_DBQueryMetaReqDirectoryQuery struct {
+	TLVRestBlock
+}
+
+// ICQ_0x07DA_0x0FB4_DBQueryMetaReplyDirectoryResponse is the server response to
+// a DirectoryQuery (0x0FA0) request. The client (ICQ 6) parses it as follows:
+//
+//	handleExtensionMetaResponse reads:
+//	  ReqSubType uint16 LE  = 0x0FB4 (META_DIRECTORY_RESPONSE)
+//	  Success    uint8      = 0x0A
+//	handleDirectoryQueryResponse then reads from Data (raw bytes after Success):
+//	  SNAC header 10 bytes BE     — family=0x05B9, subtype/context varies, flags often 0x8000, ref=0
+//	  requestResult uint8         — 1 = success
+//	  wErrLen uint16 BE           — 0 for no error
+//	  16 bytes unknown            — all zeros
+//	  itemCount uint32 BE
+//	  pageCount uint16 BE
+//	  blockCount uint16 BE        — 1 if results present, 0 if not found
+//	  itemLen uint16 BE           — length of TLV chain (if blockCount > 0)
+//	  TLV chain (BE)              — user info TLVs
+type ICQ_0x07DA_0x0FB4_DBQueryMetaReplyDirectoryResponse struct {
+	ICQMetadata
+	ReqSubType uint16
+	Success    uint8
+	Data       []byte // embedded 0x05B9 BE directory blob (ICQ6)
+}
+
+// ICQ_0x07DA_0x0FAA_DBQueryMetaReplyDirectoryData is an intermediate directory
+// result packet; wire layout matches 0x0FB4 (same client-side parser path).
+type ICQ_0x07DA_0x0FAA_DBQueryMetaReplyDirectoryData struct {
+	ICQMetadata
+	ReqSubType uint16
+	Success    uint8
+	Data       []byte // embedded 0x05B9 BE directory blob (ICQ6)
 }
 
 type ICQ_0x07D0_0x0424_DBQueryMetaReqSetPermissions struct {
@@ -2398,6 +2529,12 @@ const (
 	BUCPRegistrationImageRequest uint16 = 0x000C
 )
 
+// SNAC_0x17_0x02_BUCPLoginRequest is BUCP SNAC(0x17,0x02): a generic TLV block on
+// the authorization service. The human-readable OSCAR client name / version
+// string used for ICQ6-generation BuddyArrived gating is not a fixed field here;
+// classic ICQ/AIM FLAP login carries it in TLV LoginTLVTagsClientIdentity
+// (0x0003), parsed in foodgroup/auth.go and stored in state.ServerCookie.ClientID
+// for BOS.
 type SNAC_0x17_0x02_BUCPLoginRequest struct {
 	TLVRestBlock
 }

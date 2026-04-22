@@ -131,6 +131,102 @@ func (_c *mockSessionRegistry_AddSession_Call) RunAndReturn(run func(ctx context
 	return _c
 }
 
+// AddSessionWithIdent provides a mock function for the type mockSessionRegistry
+func (_mock *mockSessionRegistry) AddSessionWithIdent(ctx context.Context, display state.DisplayScreenName, ident state.IdentScreenName, doMultiSess bool, cfg ...func(sess *state.Session)) (*state.SessionInstance, error) {
+	_va := make([]interface{}, len(cfg))
+	for _i := range cfg {
+		_va[_i] = cfg[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, ctx, display, ident, doMultiSess)
+	_ca = append(_ca, _va...)
+	ret := _mock.Called(_ca...)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AddSessionWithIdent")
+	}
+
+	var r0 *state.SessionInstance
+	var r1 error
+	if returnFunc, ok := ret.Get(0).(func(context.Context, state.DisplayScreenName, state.IdentScreenName, bool, ...func(sess *state.Session)) (*state.SessionInstance, error)); ok {
+		return returnFunc(ctx, display, ident, doMultiSess, cfg...)
+	}
+	if returnFunc, ok := ret.Get(0).(func(context.Context, state.DisplayScreenName, state.IdentScreenName, bool, ...func(sess *state.Session)) *state.SessionInstance); ok {
+		r0 = returnFunc(ctx, display, ident, doMultiSess, cfg...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*state.SessionInstance)
+		}
+	}
+	if returnFunc, ok := ret.Get(1).(func(context.Context, state.DisplayScreenName, state.IdentScreenName, bool, ...func(sess *state.Session)) error); ok {
+		r1 = returnFunc(ctx, display, ident, doMultiSess, cfg...)
+	} else {
+		r1 = ret.Error(1)
+	}
+	return r0, r1
+}
+
+// mockSessionRegistry_AddSessionWithIdent_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AddSessionWithIdent'
+type mockSessionRegistry_AddSessionWithIdent_Call struct {
+	*mock.Call
+}
+
+// AddSessionWithIdent is a helper method to define mock.On call
+//   - ctx context.Context
+//   - display state.DisplayScreenName
+//   - ident state.IdentScreenName
+//   - doMultiSess bool
+//   - cfg ...func(sess *state.Session)
+func (_e *mockSessionRegistry_Expecter) AddSessionWithIdent(ctx interface{}, display interface{}, ident interface{}, doMultiSess interface{}, cfg ...interface{}) *mockSessionRegistry_AddSessionWithIdent_Call {
+	return &mockSessionRegistry_AddSessionWithIdent_Call{Call: _e.mock.On("AddSessionWithIdent",
+		append([]interface{}{ctx, display, ident, doMultiSess}, cfg...)...)}
+}
+
+func (_c *mockSessionRegistry_AddSessionWithIdent_Call) Run(run func(ctx context.Context, display state.DisplayScreenName, ident state.IdentScreenName, doMultiSess bool, cfg ...func(sess *state.Session))) *mockSessionRegistry_AddSessionWithIdent_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		var arg0 context.Context
+		if args[0] != nil {
+			arg0 = args[0].(context.Context)
+		}
+		var arg1 state.DisplayScreenName
+		if args[1] != nil {
+			arg1 = args[1].(state.DisplayScreenName)
+		}
+		var arg2 state.IdentScreenName
+		if args[2] != nil {
+			arg2 = args[2].(state.IdentScreenName)
+		}
+		var arg3 bool
+		if args[3] != nil {
+			arg3 = args[3].(bool)
+		}
+		variadicArgs := make([]func(sess *state.Session), len(args)-4)
+		for i, a := range args[4:] {
+			if a != nil {
+				variadicArgs[i] = a.(func(sess *state.Session))
+			}
+		}
+		run(
+			arg0,
+			arg1,
+			arg2,
+			arg3,
+			variadicArgs...,
+		)
+	})
+	return _c
+}
+
+func (_c *mockSessionRegistry_AddSessionWithIdent_Call) Return(sessionInstance *state.SessionInstance, err error) *mockSessionRegistry_AddSessionWithIdent_Call {
+	_c.Call.Return(sessionInstance, err)
+	return _c
+}
+
+func (_c *mockSessionRegistry_AddSessionWithIdent_Call) RunAndReturn(run func(ctx context.Context, display state.DisplayScreenName, ident state.IdentScreenName, doMultiSess bool, cfg ...func(sess *state.Session)) (*state.SessionInstance, error)) *mockSessionRegistry_AddSessionWithIdent_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // RemoveSession provides a mock function for the type mockSessionRegistry
 func (_mock *mockSessionRegistry) RemoveSession(session *state.Session) {
 	_mock.Called(session)

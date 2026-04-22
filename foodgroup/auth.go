@@ -118,6 +118,11 @@ func (s AuthService) RegisterBOSSession(ctx context.Context, authCookie state.Se
 		return nil, fmt.Errorf("user not found")
 	}
 
+	// ICQ accounts are keyed by numeric UIN. A few data paths leave isICQ=false
+	// even for UIN idents; ICQ 6 then shows a white/neutral buddy flower because
+	// we omit ICQ-specific TLVs in BuddyArrived. Treat numeric UIN idents as ICQ.
+	accountIsICQ := u.IsICQ || u.IdentScreenName.IsICQUIN()
+
 	ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 	defer cancel()
 
@@ -134,7 +139,14 @@ func (s AuthService) RegisterBOSSession(ctx context.Context, authCookie state.Se
 		sess.SetMemberSince(time.Now())
 	}
 
-	sess, err := s.sessionManager.AddSession(ctx, u.DisplayScreenName, doMultiSess, sessCfg, cfg)
+	// ICQ flag before AddInstance: ident/display are set by AddSessionWithIdent.
+	preSession := func(sess *state.Session) {
+		if accountIsICQ {
+			sess.SetICQAccount(true)
+		}
+	}
+
+	sess, err := s.sessionManager.AddSessionWithIdent(ctx, u.DisplayScreenName, u.IdentScreenName, doMultiSess, preSession, sessCfg, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("AddSession: %w", err)
 	}
@@ -169,7 +181,7 @@ func (s AuthService) RegisterBOSSession(ctx context.Context, authCookie state.Se
 	// indicate whether the client supports/wants multiple concurrent sessions
 	sess.SetMultiConnFlag(flag)
 
-	if u.DisplayScreenName.IsUIN() {
+	if accountIsICQ {
 		sess.SetUserInfoFlag(wire.OServiceUserFlagICQ)
 
 		uin, err := strconv.Atoi(u.IdentScreenName.String())
@@ -499,9 +511,13 @@ func (s AuthService) login(ctx context.Context, tlv wire.TLVList, advertisedHost
 		return wire.TLVRestBlock{}, err
 	}
 
+	// ClientID is taken from login TLV wire.LoginTLVTagsClientIdentity (see
+	// loginProperties.fromTLV); it is not carried on BUCP SNAC(0x17,0x02), which
+	// is only a TLV container on the auth service.
 	s.logger.Debug("login: parsed login properties",
 		"screen_name", props.screenName,
-		"client_id", props.clientID,
+		"client_id", props.clientID, // raw TLV LoginTLVTagsClientIdentity (0x0003)
+		"icq6_generation_client", state.ICQ6GenerationClient(props.clientID),
 		"is_bucp", props.isBUCPAuth,
 		"is_flap", props.isFLAPAuth,
 		"is_flap_java", props.isFLAPJavaAuth,

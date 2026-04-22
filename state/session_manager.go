@@ -197,18 +197,26 @@ func (s *InMemorySessionManager) maybeRelayMessageActiveOnly(ctx context.Context
 }
 
 func (s *InMemorySessionManager) AddSession(ctx context.Context, screenName DisplayScreenName, doMultiSess bool, cfg ...func(sess *Session)) (*SessionInstance, error) {
-	s.lockUser(screenName.IdentScreenName())
-	defer s.unlockUser(screenName.IdentScreenName())
+	return s.AddSessionWithIdent(ctx, screenName, screenName.IdentScreenName(), doMultiSess, cfg...)
+}
+
+// AddSessionWithIdent registers a session keyed by ident while using display as
+// the visible screen name. Callers must pass the same ident the rest of the
+// server uses for lookups (e.g. ICQ UIN string), not DisplayScreenName.IdentScreenName(),
+// when those differ.
+func (s *InMemorySessionManager) AddSessionWithIdent(ctx context.Context, display DisplayScreenName, ident IdentScreenName, doMultiSess bool, cfg ...func(sess *Session)) (*SessionInstance, error) {
+	s.lockUser(ident)
+	defer s.unlockUser(ident)
 
 	s.mapMutex.Lock()
-	active := s.findRec(screenName.IdentScreenName())
+	active := s.findRec(ident)
 	s.mapMutex.Unlock()
 
 	if active != nil {
 		if doMultiSess {
 			if !active.multiSession {
 				active.session.CloseSession()
-				return s.newSession(screenName, doMultiSess, cfg)
+				return s.newSessionWithIdent(display, ident, doMultiSess, cfg)
 			}
 
 			// Check if we've reached the maximum number of concurrent sessions
@@ -231,23 +239,25 @@ func (s *InMemorySessionManager) AddSession(ctx context.Context, screenName Disp
 		}
 	}
 
-	return s.newSession(screenName, doMultiSess, cfg)
+	return s.newSessionWithIdent(display, ident, doMultiSess, cfg)
 }
 
-func (s *InMemorySessionManager) newSession(screenName DisplayScreenName, doMultiSess bool, cfg []func(sess *Session)) (*SessionInstance, error) {
+func (s *InMemorySessionManager) newSessionWithIdent(display DisplayScreenName, ident IdentScreenName, doMultiSess bool, cfg []func(sess *Session)) (*SessionInstance, error) {
 	sess := NewSession()
-	sess.SetIdentScreenName(screenName.IdentScreenName())
-	sess.SetDisplayScreenName(screenName)
+	sess.SetIdentScreenName(ident)
+	sess.SetDisplayScreenName(display)
 
 	for _, f := range cfg {
-		f(sess)
+		if f != nil {
+			f(sess)
+		}
 	}
 
 	// Create a new instance within the session group
 	instance := sess.AddInstance()
 
 	s.mapMutex.Lock()
-	s.store[instance.IdentScreenName()] = &sessionSlot{
+	s.store[ident] = &sessionSlot{
 		session:      sess,
 		removed:      make(chan bool),
 		multiSession: doMultiSess,
@@ -258,10 +268,8 @@ func (s *InMemorySessionManager) newSession(screenName DisplayScreenName, doMult
 }
 
 func (s *InMemorySessionManager) findRec(identScreenName IdentScreenName) *sessionSlot {
-	for _, rec := range s.store {
-		if identScreenName == rec.session.IdentScreenName() {
-			return rec
-		}
+	if rec, ok := s.store[identScreenName]; ok {
+		return rec
 	}
 	return nil
 }
@@ -294,11 +302,8 @@ func (s *InMemorySessionManager) retrieveByScreenNames(screenNames []IdentScreen
 	defer s.mapMutex.RUnlock()
 	var ret []*Session
 	for _, sn := range screenNames {
-		for _, rec := range s.store {
-			if sn == rec.session.IdentScreenName() {
-				ret = append(ret, rec.session)
-				break
-			}
+		if rec, ok := s.store[sn]; ok {
+			ret = append(ret, rec.session)
 		}
 	}
 	return ret

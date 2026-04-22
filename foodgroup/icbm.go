@@ -37,10 +37,11 @@ func NewICBMService(
 	feedbagManager FeedbagManager,
 	snacRateLimits wire.SNACRateLimits,
 	logger *slog.Logger,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 ) *ICBMService {
 	return &ICBMService{
 		relationshipFetcher:   relationshipFetcher,
-		buddyBroadcaster:      newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster:      newBuddyNotifier(logger, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		messageRelayer:        messageRelayer,
 		offlineMessageSaver:   offlineMessageSaver,
 		offlineMessageManager: offlineMessageSaver,
@@ -826,7 +827,7 @@ func (s ICBMService) UpdateWarnLevel(ctx context.Context, instance *state.Sessio
 					s.logger.ErrorContext(ctx, "failed to set warn level", "err", err)
 				}
 
-				info := instance.Session().TLVUserInfo()
+				info := instance.Session().BuddyTLVUserInfo()
 				// lock in the current warning level to avoid race conditions
 				// where the warning level might change during this broadcast
 				// operation

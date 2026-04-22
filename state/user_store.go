@@ -74,6 +74,15 @@ func NewSQLiteUserStore(dbFilePath string) (*SQLiteUserStore, error) {
 	return store, nil
 }
 
+// Close releases the database handle. Call Close before deleting the DB file
+// on disk (required on Windows so the file is not locked).
+func (f *SQLiteUserStore) Close() error {
+	if f == nil || f.db == nil {
+		return nil
+	}
+	return f.db.Close()
+}
+
 func (f SQLiteUserStore) runMigrations() error {
 	migrationFS, err := fs.Sub(migrations, "migrations")
 	if err != nil {
@@ -213,6 +222,29 @@ func (f SQLiteUserStore) FindByICQName(ctx context.Context, firstName, lastName,
 	return users, nil
 }
 
+// FindByICQNameNickContains returns ICQ users whose stored nickname contains
+// needle as a substring (case-insensitive). Wildcard characters in needle are
+// escaped for SQL LIKE. Intended for directory / white-pages when exact
+// FindByICQName returns no rows.
+func (f SQLiteUserStore) FindByICQNameNickContains(ctx context.Context, needle string, limit int) ([]User, error) {
+	if needle == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	escaped := strings.ReplaceAll(needle, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `%`, `\%`)
+	escaped = strings.ReplaceAll(escaped, `_`, `\_`)
+	pat := "%" + strings.ToLower(escaped) + "%"
+	where := fmt.Sprintf(`LOWER(icq_basicInfo_nickName) LIKE ? ESCAPE '\' LIMIT %d`, limit)
+	users, err := f.queryUsers(ctx, where, []any{pat})
+	if err != nil {
+		err = fmt.Errorf("FindByICQNameNickContains: %w", err)
+	}
+	return users, err
+}
+
 func (f SQLiteUserStore) FindByAIMNameAndAddr(ctx context.Context, info AIMNameAndAddr) ([]User, error) {
 	var args []any
 	var clauses []string
@@ -253,8 +285,8 @@ func (f SQLiteUserStore) FindByAIMNameAndAddr(ctx context.Context, info AIMNameA
 	}
 
 	if info.NickName != "" {
-		args = append(args, info.NickName)
-		clauses = append(clauses, `LOWER(aim_nickName) = LOWER(?)`)
+		args = append(args, info.NickName, info.NickName)
+		clauses = append(clauses, `(LOWER(aim_nickName) = LOWER(?) OR LOWER(icq_basicInfo_nickName) = LOWER(?))`)
 	}
 
 	if info.ZIPCode != "" {
@@ -275,6 +307,85 @@ func (f SQLiteUserStore) FindByAIMNameAndAddr(ctx context.Context, info AIMNameA
 	}
 
 	return users, nil
+}
+
+// FindByICQNamePattern matches first name, last name, and/or nickname with SQL
+// LIKE; each non-empty pattern must already use % / _ wildcards (escape \).
+func (f SQLiteUserStore) FindByICQNamePattern(ctx context.Context, firstPat, lastPat, nickPat string) ([]User, error) {
+	var clauses []string
+	var args []any
+	if firstPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_firstName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(firstPat))
+	}
+	if lastPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_lastName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(lastPat))
+	}
+	if nickPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_nickName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(nickPat))
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	whereClause := strings.Join(clauses, " AND ")
+	users, err := f.queryUsers(ctx, whereClause, args)
+	if err != nil {
+		err = fmt.Errorf("FindByICQNamePattern: %w", err)
+	}
+	return users, err
+}
+
+// FindByICQNameAndHomeLocationPattern matches optional first/last/nickname and/or
+// ICQ home city and state using SQL LIKE. Empty patterns are ignored; all
+// non-empty clauses are ANDed. Patterns must already use % / _ wildcards with
+// backslash escaping per FindByICQNamePattern.
+func (f SQLiteUserStore) FindByICQNameAndHomeLocationPattern(ctx context.Context, firstPat, lastPat, nickPat, cityPat, statePat string) ([]User, error) {
+	var clauses []string
+	var args []any
+	if firstPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_firstName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(firstPat))
+	}
+	if lastPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_lastName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(lastPat))
+	}
+	if nickPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_nickName) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(nickPat))
+	}
+	if cityPat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_city) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(cityPat))
+	}
+	if statePat != "" {
+		clauses = append(clauses, `LOWER(icq_basicInfo_state) LIKE ? ESCAPE '\'`)
+		args = append(args, strings.ToLower(statePat))
+	}
+	if len(clauses) == 0 {
+		return nil, nil
+	}
+	whereClause := strings.Join(clauses, " AND ")
+	users, err := f.queryUsers(ctx, whereClause, args)
+	if err != nil {
+		err = fmt.Errorf("FindByICQNameAndHomeLocationPattern: %w", err)
+	}
+	return users, err
+}
+
+// FindByICQEmailPattern returns users whose ICQ email matches a SQL LIKE pattern.
+func (f SQLiteUserStore) FindByICQEmailPattern(ctx context.Context, pat string) ([]User, error) {
+	if pat == "" {
+		return nil, nil
+	}
+	whereClause := `LOWER(icq_basicInfo_emailAddress) LIKE ? ESCAPE '\'`
+	users, err := f.queryUsers(ctx, whereClause, []any{strings.ToLower(pat)})
+	if err != nil {
+		err = fmt.Errorf("FindByICQEmailPattern: %w", err)
+	}
+	return users, err
 }
 
 func (f SQLiteUserStore) FindByICQInterests(ctx context.Context, code uint16, keywords []string) ([]User, error) {
@@ -330,6 +441,32 @@ func (f SQLiteUserStore) User(ctx context.Context, screenName IdentScreenName) (
 		return nil, nil
 	}
 
+	return &users[0], nil
+}
+
+// UserForFeedbagBuddyKey returns the user row for a buddy list key: exact
+// ident match first, then normalized displayScreenName (spaces stripped,
+// lowercased) as used by feedbag buddy entries.
+func (f SQLiteUserStore) UserForFeedbagBuddyKey(ctx context.Context, key IdentScreenName) (*User, error) {
+	k := key.String()
+	k2 := NormalizeICQUINBuddyKey(key).String()
+	var users []User
+	var err error
+	if k2 != k {
+		users, err = f.queryUsers(ctx,
+			`identScreenName IN (?, ?) OR lower(replace(displayScreenName, ' ', '')) IN (?, ?)`,
+			[]any{k, k2, k, k2})
+	} else {
+		users, err = f.queryUsers(ctx,
+			`identScreenName = ? OR lower(replace(displayScreenName, ' ', '')) = ?`,
+			[]any{k, k})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("UserForFeedbagBuddyKey: %w", err)
+	}
+	if len(users) == 0 {
+		return nil, nil
+	}
 	return &users[0], nil
 }
 
@@ -547,8 +684,9 @@ func (f SQLiteUserStore) InsertUser(ctx context.Context, u User) error {
 		return errors.New("inserting user with UIN and isICQ=false")
 	}
 	q := `
-		INSERT INTO users (identScreenName, displayScreenName, authKey, weakMD5Pass, strongMD5Pass, isICQ, isBot)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (identScreenName, displayScreenName, authKey, weakMD5Pass, strongMD5Pass, isICQ, isBot,
+		                   icq_permissions_authRequired)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (identScreenName) DO NOTHING
 	`
 	result, err := f.db.ExecContext(ctx,
@@ -560,6 +698,7 @@ func (f SQLiteUserStore) InsertUser(ctx context.Context, u User) error {
 		u.StrongMD5Pass,
 		u.IsICQ,
 		u.IsBot,
+		false,
 	)
 	if err != nil {
 		return err
@@ -739,7 +878,7 @@ func (f SQLiteUserStore) FeedbagUpsert(ctx context.Context, screenName IdentScre
 			item.ClassID == wire.FeedbagClassIDPermit ||
 			item.ClassID == wire.FeedbagClassIDDeny {
 			// insert screen name identifier
-			item.Name = NewIdentScreenName(item.Name).String()
+			item.Name = NormalizeICQUINBuddyKey(NewIdentScreenName(item.Name)).String()
 		}
 		pdMode := uint8(0)
 		if item.ClassID == wire.FeedbagClassIdPdinfo {
@@ -782,8 +921,26 @@ func (f SQLiteUserStore) RegisterBuddyList(ctx context.Context, user IdentScreen
 		INSERT INTO buddyListMode (screenName, clientSidePDMode) VALUES(?, ?)
 		ON CONFLICT (screenName) DO NOTHING
 	`
-	_, err := f.db.ExecContext(ctx, q, user.String(), wire.FeedbagPDModePermitAll)
-	return err
+	if _, err := f.db.ExecContext(ctx, q, user.String(), wire.FeedbagPDModePermitAll); err != nil {
+		return err
+	}
+	// Many ICQ/AIM builds send OServiceClientOnline before SNAC(0x13,0x07) FeedbagUse.
+	// AllRelationships only counts feedbag buddies when useFeedbag is set, so the
+	// first BroadcastVisibility would otherwise miss everyone on the server list.
+	activate := `
+		UPDATE buddyListMode
+		SET clientSidePDMode = 0,
+			useFeedbag       = true
+		WHERE screenName = ?
+		  AND EXISTS (
+			SELECT 1 FROM feedbag
+			WHERE feedbag.screenName = ? AND feedbag.classID = ?
+		  )
+	`
+	if _, err := f.db.ExecContext(ctx, activate, user.String(), user.String(), wire.FeedbagClassIdBuddy); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (f SQLiteUserStore) UnregisterBuddyList(ctx context.Context, user IdentScreenName) error {
@@ -830,11 +987,11 @@ func (f SQLiteUserStore) SetPDMode(ctx context.Context, me IdentScreenName, pdMo
 		return fmt.Errorf("setClientSidePDMode: %w", err)
 	}
 
-	if err := clearClientSidePDFlags(ctx, tx, me, pdMode); err != nil {
+	if err := clearClientSidePDFlags(ctx, tx, me); err != nil {
 		return fmt.Errorf("clearClientSidePDFlags: %w", err)
 	}
 
-	if err := clearBlankClientSideBuddies(ctx, tx, me, pdMode); err != nil {
+	if err := clearBlankClientSideBuddies(ctx, tx, me); err != nil {
 		return fmt.Errorf("clearBlankClientSideBuddies: %w", err)
 	}
 
@@ -877,7 +1034,7 @@ func setClientSidePDMode(ctx context.Context, tx *sql.Tx, me IdentScreenName, pd
 
 // clearBlankClientSideBuddies removes client-side buddy where all flags
 // (isBuddy, isPermit, isDeny) are false.
-func clearBlankClientSideBuddies(ctx context.Context, tx *sql.Tx, me IdentScreenName, pdMode wire.FeedbagPDMode) error {
+func clearBlankClientSideBuddies(ctx context.Context, tx *sql.Tx, me IdentScreenName) error {
 	q := `
 		DELETE FROM clientSideBuddyList
 		WHERE isBuddy IS FALSE
@@ -885,22 +1042,26 @@ func clearBlankClientSideBuddies(ctx context.Context, tx *sql.Tx, me IdentScreen
 		  AND isDeny IS FALSE
 		  AND me = ?
 	`
-	_, err := tx.ExecContext(ctx, q, me.String(), pdMode)
+	_, err := tx.ExecContext(ctx, q, me.String())
 	return err
 }
 
 // clearClientSidePDFlags clears permit/deny flags.
-func clearClientSidePDFlags(ctx context.Context, tx *sql.Tx, me IdentScreenName, pdMode wire.FeedbagPDMode) error {
+func clearClientSidePDFlags(ctx context.Context, tx *sql.Tx, me IdentScreenName) error {
 	q := `
 		UPDATE clientSideBuddyList
 		SET isDeny = false, isPermit = false
 		WHERE me = ?
 	`
-	_, err := tx.ExecContext(ctx, q, me.String(), pdMode)
+	_, err := tx.ExecContext(ctx, q, me.String())
 	return err
 }
 
 func (f SQLiteUserStore) AddBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		INSERT INTO clientSideBuddyList (me, them, isBuddy)
 		VALUES (?, ?, true)
@@ -911,6 +1072,10 @@ func (f SQLiteUserStore) AddBuddy(ctx context.Context, me IdentScreenName, them 
 }
 
 func (f SQLiteUserStore) RemoveBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		UPDATE clientSideBuddyList
 		SET isBuddy = false
@@ -922,6 +1087,10 @@ func (f SQLiteUserStore) RemoveBuddy(ctx context.Context, me IdentScreenName, th
 }
 
 func (f SQLiteUserStore) DenyBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		INSERT INTO clientSideBuddyList (me, them, isDeny)
 		VALUES (?, ?, 1)
@@ -932,6 +1101,10 @@ func (f SQLiteUserStore) DenyBuddy(ctx context.Context, me IdentScreenName, them
 }
 
 func (f SQLiteUserStore) RemoveDenyBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		UPDATE clientSideBuddyList
 		SET isDeny = false
@@ -943,6 +1116,10 @@ func (f SQLiteUserStore) RemoveDenyBuddy(ctx context.Context, me IdentScreenName
 }
 
 func (f SQLiteUserStore) PermitBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		INSERT INTO clientSideBuddyList (me, them, isPermit)
 		VALUES (?, ?, 1)
@@ -953,6 +1130,10 @@ func (f SQLiteUserStore) PermitBuddy(ctx context.Context, me IdentScreenName, th
 }
 
 func (f SQLiteUserStore) RemovePermitBuddy(ctx context.Context, me IdentScreenName, them IdentScreenName) error {
+	them = NormalizeICQUINBuddyKey(them)
+	if me == them {
+		return nil
+	}
 	q := `
 		UPDATE clientSideBuddyList
 		SET isPermit = false

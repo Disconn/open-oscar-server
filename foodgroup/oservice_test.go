@@ -826,7 +826,7 @@ func TestOServiceService_ServiceRequest(t *testing.T) {
 			//
 			// send input SNAC
 			//
-			svc := NewOServiceService(config.Config{}, nil, slog.Default(), cookieIssuer, chatRoomManager, nil, nil, nil, wire.DefaultSNACRateLimits(), chatMessageRelayer, nil, nil)
+			svc := NewOServiceService(config.Config{}, nil, slog.Default(), cookieIssuer, chatRoomManager, nil, nil, nil, wire.DefaultSNACRateLimits(), chatMessageRelayer, nil, nil, nil, nil, nil)
 
 			outputSNAC, err := svc.ServiceRequest(context.Background(), tc.service, tc.instance, tc.inputSNAC.Frame,
 				tc.inputSNAC.Body.(wire.SNAC_0x01_0x04_OServiceServiceRequest), tc.listener)
@@ -1052,6 +1052,86 @@ func TestOServiceService_SetUserInfoFields(t *testing.T) {
 			checkSession: func(t *testing.T, session *state.Session) {
 				assert.True(t, session.Invisible())
 			},
+		},
+		{
+			name:     "ICQ-style away via UserFlags only (no Status TLV)",
+			instance: newTestInstance("me", sessOptSetFoodGroupVersion(wire.OService, 4)),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 4242,
+				},
+				Body: wire.SNAC_0x01_0x1E_OServiceSetUserInfoFields{
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							wire.NewTLVBE(wire.OServiceUserInfoUserFlags, uint16(wire.OServiceUserFlagOSCARFree|wire.OServiceUserFlagUnavailable)),
+						},
+					},
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.OService,
+					SubGroup:  wire.OServiceUserInfoUpdate,
+					RequestID: 4242,
+				},
+				Body: func(val any) bool {
+					snac, ok := val.(wire.SNAC_0x01_0x0F_OServiceUserInfoUpdate)
+					if !ok || len(snac.UserInfo) < 2 {
+						return false
+					}
+					flags, has := snac.UserInfo[1].Uint16BE(wire.OServiceUserInfoUserFlags)
+					return has && flags&wire.OServiceUserFlagUnavailable != 0
+				},
+			},
+			mockParams: mockParams{
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastBuddyArrivedParams: broadcastBuddyArrivedParams{
+						{
+							screenName: state.DisplayScreenName("me"),
+						},
+					},
+				},
+			},
+			checkSession: func(t *testing.T, session *state.Session) {
+				assert.True(t, session.Away())
+			},
+		},
+		{
+			name:     "ICQ UserFlags2 only still triggers buddy refresh",
+			instance: newTestInstance("me", sessOptSetFoodGroupVersion(wire.OService, 4)),
+			inputSNAC: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					RequestID: 77,
+				},
+				Body: wire.SNAC_0x01_0x1E_OServiceSetUserInfoFields{
+					TLVRestBlock: wire.TLVRestBlock{
+						TLVList: wire.TLVList{
+							wire.NewTLVBE(wire.OServiceUserInfoUserFlags2, uint32(wire.OServiceUserFlag2BuddyMatchDirect)),
+						},
+					},
+				},
+			},
+			expectOutput: wire.SNACMessage{
+				Frame: wire.SNACFrame{
+					FoodGroup: wire.OService,
+					SubGroup:  wire.OServiceUserInfoUpdate,
+					RequestID: 77,
+				},
+				Body: func(val any) bool {
+					_, ok := val.(wire.SNAC_0x01_0x0F_OServiceUserInfoUpdate)
+					return ok
+				},
+			},
+			mockParams: mockParams{
+				buddyBroadcasterParams: buddyBroadcasterParams{
+					broadcastBuddyArrivedParams: broadcastBuddyArrivedParams{
+						{
+							screenName: state.DisplayScreenName("me"),
+						},
+					},
+				},
+			},
+			checkSession: func(t *testing.T, session *state.Session) {},
 		},
 	}
 
@@ -1334,6 +1414,7 @@ func TestOServiceService_RateParamsQuery(t *testing.T) {
 				{FoodGroup: wire.Feedbag, SubGroup: wire.FeedbagIsAuthRequiredQuery},
 				{FoodGroup: wire.Feedbag, SubGroup: wire.FeedbagIsAuthRequiredReply},
 				{FoodGroup: wire.Feedbag, SubGroup: wire.FeedbagRecentBuddyUpdate},
+				{FoodGroup: wire.Feedbag, SubGroup: wire.FeedbagICQExtension37},
 				{FoodGroup: wire.Feedbag, SubGroup: 0x0026},
 				{FoodGroup: wire.Feedbag, SubGroup: 0x0027},
 				{FoodGroup: wire.Feedbag, SubGroup: 0x0028},
@@ -1775,7 +1856,7 @@ func TestOServiceService_HostOnline(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			svc := NewOServiceService(config.Config{}, nil, slog.Default(), nil, nil, nil, nil, nil, wire.DefaultSNACRateLimits(), nil, nil, nil)
+			svc := NewOServiceService(config.Config{}, nil, slog.Default(), nil, nil, nil, nil, nil, wire.DefaultSNACRateLimits(), nil, nil, nil, nil, nil, nil)
 			have := svc.HostOnline(tc.service)
 			assert.Equal(t, tc.expectOutput, have)
 		})
@@ -2738,7 +2819,7 @@ func TestOServiceService_ClientOnline(t *testing.T) {
 					Return(params.err)
 			}
 
-			svc := NewOServiceService(tt.cfg, messageRelayer, slog.Default(), nil, chatRoomManager, nil, nil, nil, wire.DefaultSNACRateLimits(), chatMessageRelayer, profileManager, offlineMessageManager)
+			svc := NewOServiceService(tt.cfg, messageRelayer, slog.Default(), nil, chatRoomManager, nil, nil, nil, wire.DefaultSNACRateLimits(), chatMessageRelayer, profileManager, offlineMessageManager, nil, nil, nil)
 			svc.buddyBroadcaster = buddyUpdateBroadcaster
 			haveErr := svc.ClientOnline(context.Background(), tt.service, tt.bodyIn, tt.instance)
 			assert.ErrorIs(t, haveErr, tt.wantErr)

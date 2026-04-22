@@ -50,6 +50,49 @@ func NewIdentScreenName(screenName string) IdentScreenName {
 	return IdentScreenName{screenName: str}
 }
 
+// NormalizeICQUINBuddyKey returns a canonical IdentScreenName for strings that
+// contain only ASCII digits (after NewIdentScreenName-style normalization).
+// Leading-zero ICQ UIN forms (e.g. "0365199535") map to the same key as
+// "365199535". Non-numeric identifiers are returned unchanged.
+func NormalizeICQUINBuddyKey(screenName IdentScreenName) IdentScreenName {
+	s := screenName.String()
+	if s == "" {
+		return screenName
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return screenName
+		}
+	}
+	u, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		return screenName
+	}
+	return NewIdentScreenName(strconv.FormatUint(u, 10))
+}
+
+// IsICQUIN reports whether this identity is a numeric ICQ UIN in the canonical
+// range (same rule as [DisplayScreenName.ValidateUIN]). Some legacy DB rows or
+// imports have isICQ=false while the ident is still a UIN; BOS must still treat
+// the session as ICQ so buddy TLVs (flags, WebAware, caps, TLV 0x0C) match what
+// newer clients (e.g. ICQ 6) expect.
+func (i IdentScreenName) IsICQUIN() bool {
+	s := i.String()
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	uin, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return false
+	}
+	return uin >= 10000 && uin <= 2147483646
+}
+
 // DisplayScreenName type represents the screen name in the user-defined format.
 // This includes the original casing and spacing as defined by the user.
 type DisplayScreenName string

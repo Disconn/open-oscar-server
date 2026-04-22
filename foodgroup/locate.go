@@ -2,7 +2,6 @@ package foodgroup
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -11,10 +10,9 @@ import (
 )
 
 // omitCaps is the map of to filter out of the client's capability list
-// because they are not currently supported by the server.
 var omitCaps = map[[16]byte]bool{
-	wire.CapGames:      true, // games
 	wire.CapSupportICQ: true, // ICQ inter-op
+	wire.CapGames:      true, // games
 	wire.CapVoiceChat:  true, // voice chat
 }
 
@@ -26,9 +24,10 @@ func NewLocateService(
 	relationshipFetcher RelationshipFetcher,
 	sessionRetriever SessionRetriever,
 	userManager UserManager,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 ) LocateService {
 	return LocateService{
-		buddyBroadcaster:    newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
+		buddyBroadcaster:    newBuddyNotifier(nil, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
 		messageRelayer:      messageRelayer,
 		relationshipFetcher: relationshipFetcher,
 		profileManager:      profileManager,
@@ -47,6 +46,23 @@ type LocateService struct {
 	profileManager      ProfileManager
 	sessionRetriever    SessionRetriever
 	userManager         UserManager
+}
+
+// retrieveSessionForLookup resolves a live BOS session for Locate/ICQ lookups.
+// ICQ clients often send buddy UINs with leading zeros; sessions are keyed by
+// canonical UIN (see [state.NormalizeICQUINBuddyKey]).
+func (s LocateService) retrieveSessionForLookup(sn state.IdentScreenName) *state.Session {
+	if s.sessionRetriever == nil {
+		return nil
+	}
+	if sess := s.sessionRetriever.RetrieveSession(sn); sess != nil {
+		return sess
+	}
+	norm := state.NormalizeICQUINBuddyKey(sn)
+	if norm.String() != sn.String() {
+		return s.sessionRetriever.RetrieveSession(norm)
+	}
+	return nil
 }
 
 // RightsQuery returns SNAC wire.LocateRightsReply, which contains Locate food
@@ -125,7 +141,7 @@ func (s LocateService) SetInfo(ctx context.Context, instance *state.SessionInsta
 		}
 		instance.SetAwayMessage(awayMsg)
 		if instance.SignonComplete() {
-			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 				return err
 			}
 		}
@@ -133,13 +149,12 @@ func (s LocateService) SetInfo(ctx context.Context, instance *state.SessionInsta
 
 	// update client capabilities (buddy icon, chat, etc...)
 	if b, hasCaps := inBody.Bytes(wire.LocateTLVTagsInfoCapabilities); hasCaps {
-		if len(b)%16 != 0 {
-			return errors.New("capability list must be array of 16-byte values")
+		parsed, err := wire.ParseLocateCapabilitiesTLV(b)
+		if err != nil {
+			return err
 		}
 		var caps [][16]byte
-		for i := 0; i < len(b); i += 16 {
-			var c [16]byte
-			copy(c[:], b[i:i+16])
+		for _, c := range parsed {
 			if _, found := omitCaps[c]; found {
 				continue
 			}
@@ -147,7 +162,7 @@ func (s LocateService) SetInfo(ctx context.Context, instance *state.SessionInsta
 		}
 		instance.SetCaps(caps)
 		if instance.SignonComplete() {
-			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 				return err
 			}
 		}
@@ -173,9 +188,11 @@ func newLocateErr(requestID uint32, errCode uint16) wire.SNACMessage {
 // current user). It returns wire.LocateUserInfoReply, which contains the
 // profile, if requested, and/or the away message, if requested.
 func (s LocateService) UserInfoQuery(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0x02_0x05_LocateUserInfoQuery) (wire.SNACMessage, error) {
-	lookupSN := state.NewIdentScreenName(inBody.ScreenName)
+	lookupSN := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(inBody.ScreenName))
 
 	var lookupSess *state.Session
+	var offlineUser *state.User
+
 	if lookupSN == instance.IdentScreenName() {
 		// looking up own profile
 		lookupSess = instance.Session()
@@ -189,9 +206,18 @@ func (s LocateService) UserInfoQuery(ctx context.Context, instance *state.Sessio
 			return newLocateErr(inFrame.RequestID, wire.ErrorCodeNotLoggedOn), nil
 		}
 
-		lookupSess = s.sessionRetriever.RetrieveSession(lookupSN)
-		if lookupSess == nil {
-			// user is offline
+		lookupSess = s.retrieveSessionForLookup(lookupSN)
+		if lookupSess == nil && s.userManager != nil {
+			u, err := s.userManager.User(ctx, lookupSN)
+			if err != nil {
+				return wire.SNACMessage{}, err
+			}
+			if u == nil {
+				return newLocateErr(inFrame.RequestID, wire.ErrorCodeNotLoggedOn), nil
+			}
+			offlineUser = u
+		} else if lookupSess == nil {
+			// user is offline and caller has no account store
 			return newLocateErr(inFrame.RequestID, wire.ErrorCodeNotLoggedOn), nil
 		}
 	}
@@ -199,10 +225,19 @@ func (s LocateService) UserInfoQuery(ctx context.Context, instance *state.Sessio
 	var list wire.TLVList
 
 	if inBody.RequestProfile() {
-		prof := lookupSess.Profile()
-		// if looking up own profile, return this instance's profile for consistency
-		if instance.IdentScreenName() == lookupSN {
-			prof = instance.Profile()
+		var prof state.UserProfile
+		if lookupSess != nil {
+			prof = lookupSess.Profile()
+			// if looking up own profile, return this instance's profile for consistency
+			if instance.IdentScreenName() == lookupSN {
+				prof = instance.Profile()
+			}
+		} else if offlineUser != nil && s.profileManager != nil {
+			var err error
+			prof, err = s.profileManager.Profile(ctx, lookupSN)
+			if err != nil {
+				return wire.SNACMessage{}, err
+			}
 		}
 		list.AppendList([]wire.TLV{
 			wire.NewTLVBE(wire.LocateTLVTagsInfoSigMime, prof.MIMEType),
@@ -210,11 +245,20 @@ func (s LocateService) UserInfoQuery(ctx context.Context, instance *state.Sessio
 		})
 	}
 
-	if inBody.RequestAwayMessage() && lookupSess.Away() {
+	if lookupSess != nil && inBody.RequestAwayMessage() && lookupSess.Away() {
 		list.AppendList([]wire.TLV{
 			wire.NewTLVBE(wire.LocateTLVTagsInfoUnavailableMime, `text/aolrtf; charset="us-ascii"`),
 			wire.NewTLVBE(wire.LocateTLVTagsInfoUnavailableData, lookupSess.AwayMessage()),
 		})
+	}
+
+	var tlvUI wire.TLVUserInfo
+	if lookupSess != nil {
+		// BuddyArrived uses BuddyWireScreenName; Locate must match so ICQ clients
+		// correlate status with the buddy list entry (UIN, not display nick).
+		tlvUI = lookupSess.BuddyTLVUserInfo()
+	} else {
+		tlvUI = locateOfflineTLVUserInfo(offlineUser)
 	}
 
 	return wire.SNACMessage{
@@ -224,12 +268,55 @@ func (s LocateService) UserInfoQuery(ctx context.Context, instance *state.Sessio
 			RequestID: inFrame.RequestID,
 		},
 		Body: wire.SNAC_0x02_0x06_LocateUserInfoReply{
-			TLVUserInfo: lookupSess.TLVUserInfo(),
+			TLVUserInfo: tlvUI,
 			LocateInfo: wire.TLVRestBlock{
 				TLVList: list,
 			},
 		},
 	}, nil
+}
+
+// locateOfflineTLVUserInfo builds a minimal Locate TLVUserInfo for an account
+// with no live OSCAR session (ICQ 6 otherwise often treats NotLoggedOn as
+// “unknown user” for profile / info dialogs).
+func locateOfflineTLVUserInfo(u *state.User) wire.TLVUserInfo {
+	if u == nil {
+		return wire.TLVUserInfo{}
+	}
+	var flags uint16
+	if u.IsICQ {
+		flags |= wire.OServiceUserFlagICQ
+	}
+	flags |= wire.OServiceUserFlagUnavailable
+	if u.IsBot {
+		flags |= wire.OServiceUserFlagBot
+	}
+	published := flags
+	if published&wire.OServiceUserFlagICQ == wire.OServiceUserFlagICQ {
+		published &^= wire.OServiceUserFlagUnconfirmed
+	}
+	var status uint32
+	if u.IsICQ {
+		status = wire.OServiceUserStatusWebAware
+	}
+	tlvs := wire.TLVList{}
+	tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoSignonTOD, uint32(0)))
+	tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoUserFlags, published))
+	tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoStatus, status))
+	if u.IsICQ {
+		tlvs.Append(wire.NewTLVBE(wire.OServiceUserInfoOnlineTime, uint32(0)))
+	}
+	screen := u.DisplayScreenName.String()
+	if u.IsICQ {
+		screen = u.IdentScreenName.String()
+	}
+	return wire.TLVUserInfo{
+		ScreenName:   screen,
+		WarningLevel: 0,
+		TLVBlock: wire.TLVBlock{
+			TLVList: tlvs,
+		},
+	}
 }
 
 // SetDirInfo sets directory information for current user (first name, last

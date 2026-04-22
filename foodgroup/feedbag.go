@@ -21,32 +21,33 @@ func NewFeedbagService(
 	bartItemManager BARTItemManager,
 	relationshipFetcher RelationshipFetcher,
 	sessionRetriever SessionRetriever,
-	userManager UserManager,
-	icbmSender func(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0x04_0x06_ICBMChannelMsgToHost) (*wire.SNACMessage, error),
+	clientSideBuddyListManager ClientSideBuddyListManager,
+	userFinder ICQUserFinder,
+	buddyFeedbagLookup BuddyFeedbagUserLookup,
 ) FeedbagService {
 	return FeedbagService{
-		bartItemManager:  bartItemManager,
-		buddyBroadcaster: newBuddyNotifier(bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever),
-		feedbagManager:   feedbagManager,
-		logger:           logger,
-		messageRelayer:   messageRelayer,
-		sessionRetriever: sessionRetriever,
-		userManager:      userManager,
-		icbmSender:       icbmSender,
+		bartItemManager:            bartItemManager,
+		buddyBroadcaster:           newBuddyNotifier(logger, bartItemManager, relationshipFetcher, messageRelayer, sessionRetriever, buddyFeedbagLookup),
+		clientSideBuddyListManager: clientSideBuddyListManager,
+		feedbagManager:             feedbagManager,
+		logger:                     logger,
+		messageRelayer:             messageRelayer,
+		sessionRetriever:           sessionRetriever,
+		userFinder:                 userFinder,
 	}
 }
 
 // FeedbagService provides functionality for the Feedbag food group, which
 // handles buddy list management.
 type FeedbagService struct {
-	bartItemManager  BARTItemManager
-	buddyBroadcaster buddyBroadcaster
-	feedbagManager   FeedbagManager
-	logger           *slog.Logger
-	messageRelayer   MessageRelayer
-	sessionRetriever SessionRetriever
-	userManager      UserManager
-	icbmSender       func(ctx context.Context, instance *state.SessionInstance, inFrame wire.SNACFrame, inBody wire.SNAC_0x04_0x06_ICBMChannelMsgToHost) (*wire.SNACMessage, error)
+	bartItemManager            BARTItemManager
+	buddyBroadcaster           buddyBroadcaster
+	clientSideBuddyListManager ClientSideBuddyListManager
+	feedbagManager             FeedbagManager
+	logger                     *slog.Logger
+	messageRelayer             MessageRelayer
+	sessionRetriever           SessionRetriever
+	userFinder                 ICQUserFinder
 }
 
 // RightsQuery returns SNAC wire.FeedbagRightsReply, which contains Feedbag
@@ -239,6 +240,26 @@ func (s FeedbagService) UpsertItem(ctx context.Context, instance *state.SessionI
 
 	setSessionBuddyPrefs(items, instance)
 
+	var filter []state.IdentScreenName
+	var alertAll bool
+	for i, item := range items {
+		if authRequired[i] {
+			continue
+		}
+		switch item.ClassID {
+		case wire.FeedbagClassIdBuddy, wire.FeedbagClassIDPermit, wire.FeedbagClassIDDeny:
+			// Must match keys stored by FeedbagUpsert (canonical ICQ UIN) so
+			// AllRelationships(filter) joins against feedbag.name for BroadcastVisibility.
+			filter = append(filter, state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(item.Name)))
+		case wire.FeedbagClassIdBart:
+			if err := s.setBARTItem(ctx, instance, item); err != nil {
+				return nil, err
+			}
+		case wire.FeedbagClassIdPdinfo:
+			alertAll = true
+		}
+	}
+
 	snacPayloadOut := wire.SNAC_0x13_0x0E_FeedbagStatus{}
 	for _, item := range items {
 		if authRequired[item.Name] {
@@ -268,19 +289,32 @@ func (s FeedbagService) UpsertItem(ctx context.Context, instance *state.SessionI
 		},
 	})
 
-	var filter []state.IdentScreenName
-	var alertAll bool
-	for _, item := range toUpsert {
-		switch item.ClassID {
-		case wire.FeedbagClassIdBuddy, wire.FeedbagClassIDPermit, wire.FeedbagClassIDDeny:
-			filter = append(filter, state.NewIdentScreenName(item.Name))
-		case wire.FeedbagClassIdBart:
-			if err := s.setBARTItem(ctx, instance, item); err != nil {
-				return nil, err
-			}
-		case wire.FeedbagClassIdPdinfo:
-			alertAll = true
+	adderKey := state.NormalizeICQUINBuddyKey(instance.IdentScreenName())
+	for i, item := range items {
+		if authRequired[i] || item.ClassID != wire.FeedbagClassIdBuddy {
+			continue
 		}
+		buddyKey := state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(item.Name))
+		if buddyKey == adderKey || !buddyKey.IsICQUIN() {
+			continue
+		}
+		// ICQ 6 SSI: peer must receive SNAC(0x13,0x1C) with the adder's UIN so the
+		// client updates "added you" / visibility state (same pattern as auth grant
+		// and the ICQ legacy bridge).
+		s.messageRelayer.RelayToScreenName(ctx, buddyKey, wire.SNACMessage{
+			Frame: wire.SNACFrame{
+				FoodGroup: wire.Feedbag,
+				SubGroup:  wire.FeedbagBuddyAdded,
+				RequestID: wire.ReqIDFromServer,
+			},
+			Body: wire.SNAC_0x13_0x1C_FeedbagBuddyAddedBody{
+				InnerLen: 6,
+				A:        1,
+				B:        2,
+				C:        2,
+				UIN:      adderKey.String(),
+			},
+		})
 	}
 
 	if alertAll || len(filter) > 0 {
@@ -331,7 +365,7 @@ func (s FeedbagService) setBARTItem(ctx context.Context, instance *state.Session
 		if bartID.Type == wire.BARTTypesBuddyIconSmall || bartID.Type == wire.BARTTypesBuddyIcon {
 			instance.Session().SetBuddyIcon(bartID)
 			// tell buddies about the icon update
-			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().TLVUserInfo()); err != nil {
+			if err := s.buddyBroadcaster.BroadcastBuddyArrived(ctx, instance.IdentScreenName(), instance.Session().BuddyTLVUserInfo()); err != nil {
 				return err
 			}
 		}
@@ -407,7 +441,7 @@ func (s FeedbagService) DeleteItem(ctx context.Context, instance *state.SessionI
 	for _, item := range inBody.Items {
 		switch item.ClassID {
 		case wire.FeedbagClassIdBuddy, wire.FeedbagClassIDDeny, wire.FeedbagClassIDPermit:
-			filter = append(filter, state.NewIdentScreenName(item.Name))
+			filter = append(filter, state.NormalizeICQUINBuddyKey(state.NewIdentScreenName(item.Name)))
 		}
 	}
 
@@ -449,7 +483,14 @@ func (s FeedbagService) Use(ctx context.Context, instance *state.SessionInstance
 		return fmt.Errorf("feedbagManager.Feedbag: %w", err)
 	}
 	setSessionBuddyPrefs(items, instance)
-	instance.Session().SetUsesFeedbag()
+	// ICQ 6 and some AIM builds send OServiceClientOnline before FeedbagUse.
+	// Without a second visibility pass after useFeedbag is enabled, buddy graph
+	// queries miss server-list contacts and no BuddyArrived SNACs are sent.
+	if instance.SignonComplete() {
+		if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, nil, false); err != nil {
+			return fmt.Errorf("buddyBroadcaster.BroadcastVisibility after Feedbag Use: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -579,6 +620,73 @@ func (s FeedbagService) RespondAuthorizeToHost(ctx context.Context, instance *st
 		return fmt.Errorf("could not send ICBM message: %w", err)
 	}
 
+	if inBody.Accepted == 1 {
+		requester := state.NewIdentScreenName(inBody.ScreenName)
+		granter := instance.IdentScreenName()
+		if s.clientSideBuddyListManager != nil {
+			if err := s.clientSideBuddyListManager.AddBuddy(ctx, granter, requester); err != nil {
+				return fmt.Errorf("AddBuddy after auth grant (granter→requester): %w", err)
+			}
+			if err := s.clientSideBuddyListManager.AddBuddy(ctx, requester, granter); err != nil {
+				return fmt.Errorf("AddBuddy after auth grant (requester→granter): %w", err)
+			}
+		}
+		// ICQ/OSCAR clients clear the pending auth state from SNAC(0x13,0x1B); legacy
+		// ICQ→OSCAR bridge sends the same after channel-4 grant.
+		s.messageRelayer.RelayToScreenName(ctx, requester, wire.SNACMessage{
+			Frame: wire.SNACFrame{
+				FoodGroup: wire.Feedbag,
+				SubGroup:  wire.FeedbagRespondAuthorizeToClient,
+			},
+			Body: wire.SNAC_0x13_0x1B_FeedbagRespondAuthorizeToClient{
+				ScreenName: granter.String(),
+				Accepted:   1,
+			},
+		})
+		// ICQ 6 SSI: approver must receive 0x13/0x001C with the requester's UIN so the
+		// client treats the contact as a normal buddy (not stuck "pending"/non-buddy).
+		s.messageRelayer.RelayToScreenName(ctx, granter, wire.SNACMessage{
+			Frame: wire.SNACFrame{
+				FoodGroup: wire.Feedbag,
+				SubGroup:  wire.FeedbagBuddyAdded,
+				RequestID: wire.ReqIDFromServer,
+			},
+			Body: wire.SNAC_0x13_0x1C_FeedbagBuddyAddedBody{
+				InnerLen: 6,
+				A:        1,
+				B:        2,
+				C:        2,
+				UIN:      requester.String(),
+			},
+		})
+		if instance.SignonComplete() {
+			if err := s.buddyBroadcaster.BroadcastVisibility(ctx, instance, []state.IdentScreenName{requester}, true); err != nil {
+				return fmt.Errorf("BroadcastVisibility after auth grant (granter): %w", err)
+			}
+		}
+		if s.sessionRetriever != nil {
+			if rs := s.sessionRetriever.RetrieveSession(requester); rs != nil {
+				if ri := feedbagFirstBroadcastInstance(rs); ri != nil && ri.SignonComplete() {
+					if err := s.buddyBroadcaster.BroadcastVisibility(ctx, ri, []state.IdentScreenName{granter}, true); err != nil {
+						return fmt.Errorf("BroadcastVisibility after auth grant (requester): %w", err)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func feedbagFirstBroadcastInstance(sess *state.Session) *state.SessionInstance {
+	if sess == nil {
+		return nil
+	}
+	for _, inst := range sess.Instances() {
+		if inst.SignonComplete() {
+			return inst
+		}
+	}
 	return nil
 }
 
